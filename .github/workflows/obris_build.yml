@@ -165,7 +165,7 @@ jobs:
 if [ -f "$DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
   exec java -Xmx1024m -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
 else
-  echo "Gradle wrapper JAR not found — using system gradle"
+  echo "Gradle wrapper JAR not found - using system gradle"
   exec gradle "$@"
 fi
 GRADLEW
