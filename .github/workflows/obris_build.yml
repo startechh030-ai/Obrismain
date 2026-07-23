@@ -26,7 +26,6 @@ on:
 
 env:
   BUILD_TYPE: ${{ github.event.inputs.build_type || 'Debug' }}
-  NDK_VERSION: '27.0.12077973'
 
 jobs:
   build-native:
@@ -47,18 +46,47 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Android NDK
+      - name: Install Android SDK & NDK
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> $GITHUB_ENV
-          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION" >> $GITHUB_ENV
+          # Install Android command line tools
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -o /tmp/cmdline-tools.zip
+          unzip -q /tmp/cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/
+          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+
+          # Accept licenses
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+
+          # Install platform tools, build tools, NDK
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1" \
+            > /dev/null 2>&1
+
+          # Set env for subsequent steps
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Install build prerequisites
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build cmake curl unzip
+          sudo apt-get install -y -qq ninja-build curl unzip
+
+      - name: Verify tools
+        run: |
+          echo "=== Tool versions ==="
+          ninja --version
+          cmake --version | head -1
+          echo "NDK: $ANDROID_NDK"
+          ls -la "$ANDROID_NDK/build/cmake/android.toolchain.cmake" || echo "Toolchain MISSING!"
+          echo "Ninja at: $(which ninja)"
 
       - name: Cache third-party dependencies
         uses: actions/cache@v4
@@ -121,6 +149,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Android SDK (for APK build)
+        run: |
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -o /tmp/cmdline-tools.zip
+          unzip -q /tmp/cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/
+          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+
       - name: Download all .so artifacts
         uses: actions/download-artifact@v4
         with:
@@ -129,6 +177,7 @@ jobs:
       - name: Restructure JNI libs
         run: |
           for dir in android/app/src/main/jniLibs/obris-*/; do
+            [ ! -d "$dir" ] && continue
             abi=$(basename "$dir" | sed 's/obris-//')
             mkdir -p "android/app/src/main/jniLibs/$abi"
             cp "$dir"/*.so "android/app/src/main/jniLibs/$abi/" 2>/dev/null || true
@@ -137,33 +186,20 @@ jobs:
           echo "JNI libs structure:"
           find android/app/src/main/jniLibs -type f 2>/dev/null || echo "(no libs)"
 
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Build APK
         run: |
           cd android
-          # Generate Gradle wrapper if it doesn't exist
+          # Generate local.properties
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          # Gradle wrapper
           if [ ! -f "gradlew" ]; then
-            if command -v gradle &>/dev/null; then
-              gradle wrapper --gradle-version 8.5
-            else
-              echo "Gradle wrapper not found — using gradle from PATH"
-              gradle assembleDebug --no-daemon --continue || echo "APK build failed"
-              exit 0
-            fi
+            gradle wrapper --gradle-version 8.5 2>/dev/null || true
           fi
           chmod +x gradlew 2>/dev/null || true
-          ./gradlew assembleDebug --no-daemon --continue 2>&1
-          if [ $? -ne 0 ]; then
-            echo "Gradle wrapper failed — trying system gradle..."
-            gradle assembleDebug --no-daemon --continue 2>&1 || echo "APK build failed — check logs above"
+          if [ -f "gradlew" ]; then
+            ./gradlew assembleDebug --no-daemon --continue 2>&1
+          else
+            gradle assembleDebug --no-daemon --continue 2>&1
           fi
 
       - name: Upload APK
