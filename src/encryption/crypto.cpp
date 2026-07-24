@@ -1,6 +1,7 @@
 #include "crypto.h"
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <android/log.h>
 
 #define LOG_TAG "ObrisCrypto"

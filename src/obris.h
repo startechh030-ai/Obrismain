@@ -50,9 +50,9 @@ typedef struct {
 // ── Model Info ────────────────────────────────────────────────
 typedef struct {
     const char* path;      // GLB file path
-    float pos[3];          // position xyz
-    float rot[4];          // quaternion xyzw
-    float scale[3];        // scale xyz
+    const float* pos;      // position xyz (can be NULL for defaults)
+    const float* rot;      // quaternion xyzw (can be NULL for identity)
+    const float* scale;    // scale xyz (can be NULL for 1,1,1)
     const char* animName;  // animation to play (or NULL)
 } ObrisModelInfo;
 

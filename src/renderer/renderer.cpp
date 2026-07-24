@@ -43,19 +43,18 @@ bool Renderer::init(const ObrisConfig& config) {
 
 bool Renderer::initFilament(const ObrisConfig& config) {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    using namespace filament;
 
     // 1. Create Engine
-    Engine::Backend backend = config.useVulkan ?
-        Engine::Backend::VULKAN : Engine::Backend::OPENGL;
-    engine_ = Engine::create(backend);
+    filament::Engine::Backend backend = config.useVulkan ?
+        filament::Engine::Backend::VULKAN : filament::Engine::Backend::OPENGL;
+    engine_ = filament::Engine::create(backend);
     if (!engine_) { LOGE("Failed to create Engine"); return false; }
-    auto* e = static_cast<Engine*>(engine_);
+    auto* e = static_cast<filament::Engine*>(engine_);
 
     // 2. Create Renderer
     renderer_ = e->createRenderer();
     if (!renderer_) { LOGE("Failed to create Renderer"); return false; }
-    auto* r = static_cast<Renderer*>(renderer_);
+    auto* r = static_cast<filament::Renderer*>(renderer_);
 
     // 3. Create SwapChain
     swapChain_ = e->createSwapChain(
@@ -66,15 +65,15 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     scene_ = e->createScene();
 
     // 5. Create Camera
-    cameraEntity_ = (void*)(uintptr_t)EntityManager::get().create();
-    auto* cam = e->createCamera(EntityManager::get().create());
-    camera_ = (ObrisCamera*)cam;
+    auto camEntity = filament::EntityManager::get().create();
+    cameraEntity_ = (void*)(uintptr_t)camEntity;
+    auto* cam = e->createCamera(camEntity);
 
     // 6. Create View
     view_ = e->createView();
     if (!view_) { LOGE("Failed to create View"); return false; }
-    auto* v = static_cast<View*>(view_);
-    v->setScene(static_cast<Scene*>(scene_));
+    auto* v = static_cast<filament::View*>(view_);
+    v->setScene(static_cast<filament::Scene*>(scene_));
     v->setCamera(cam);
     v->setViewport({0, 0, (uint32_t)width_, (uint32_t)height_});
     v->setPostProcessingEnabled(false); // faster on mobile
@@ -109,23 +108,18 @@ void Renderer::shutdown() {
     lights_.clear();
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    using namespace filament;
 
     if (engine_) {
-        auto* e = static_cast<Engine*>(engine_);
+        auto* e = static_cast<filament::Engine*>(engine_);
 
-        if (indirectLight_) e->destroy(static_cast<IndirectLight*>(indirectLight_));
-        if (skybox_) e->destroy(static_cast<Skybox*>(skybox_));
-        if (view_) e->destroy(static_cast<View*>(view_));
-        if (renderer_) e->destroy(static_cast<Renderer*>(renderer_));
-        if (scene_) e->destroy(static_cast<Scene*>(scene_));
-        if (swapChain_) e->destroy(static_cast<SwapChain*>(swapChain_));
+        if (indirectLight_) e->destroy(static_cast<filament::IndirectLight*>(indirectLight_));
+        if (skybox_) e->destroy(static_cast<filament::Skybox*>(skybox_));
+        if (view_) e->destroy(static_cast<filament::View*>(view_));
+        if (renderer_) e->destroy(static_cast<filament::Renderer*>(renderer_));
+        if (scene_) e->destroy(static_cast<filament::Scene*>(scene_));
+        if (swapChain_) e->destroy(static_cast<filament::SwapChain*>(swapChain_));
 
-        // Destroy camera entity
-        // e->destroyCameraComponent(cameraEntity_);
-        // EntityManager::get().destroy(cameraEntity_);
-
-        Engine::destroy(&e);
+        filament::Engine::destroy(&e);
         engine_ = nullptr;
     }
 #endif
@@ -148,12 +142,11 @@ void Renderer::shutdown() {
 
 void Renderer::renderFrame() {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    using namespace filament;
-    auto* r = static_cast<Renderer*>(renderer_);
-    auto* sw = static_cast<SwapChain*>(swapChain_);
+    auto* r = static_cast<filament::Renderer*>(renderer_);
+    auto* sw = static_cast<filament::SwapChain*>(swapChain_);
 
     if (r->beginFrame(sw)) {
-        r->render(static_cast<View*>(view_));
+        r->render(static_cast<filament::View*>(view_));
         r->endFrame();
     }
 #endif
@@ -164,7 +157,7 @@ void Renderer::resize(int w, int h) {
     height_ = h;
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     if (view_) {
-        static_cast<View*>(view_)->setViewport({0, 0, (uint32_t)w, (uint32_t)h});
+        static_cast<filament::View*>(view_)->setViewport({0, 0, (uint32_t)w, (uint32_t)h});
     }
 #endif
 }
@@ -205,19 +198,16 @@ int Renderer::addLight(const ObrisLight& light) {
     int idx = (int)lights_.size() - 1;
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    using namespace filament;
-    auto* e = static_cast<Engine*>(engine_);
-    auto* s = static_cast<Scene*>(scene_);
-
-    // EntityManager::Entity entity = EntityManager::get().create();
-    // LightManager::Builder(light.type == 0
-    //     ? LightManager::Type::DIRECTIONAL
-    //     : LightManager::Type::POINT)
-    //     .color(Color::toLinear({light.color[0], light.color[1], light.color[2]}))
+    // TODO: Create filament::LightManager light
+    // filament::EntityManager::Entity entity = filament::EntityManager::get().create();
+    // filament::LightManager::Builder(light.type == 0
+    //     ? filament::LightManager::Type::DIRECTIONAL
+    //     : filament::LightManager::Type::POINT)
+    //     .color(filament::Color::toLinear({light.color[0], light.color[1], light.color[2]}))
     //     .intensity(light.intensity)
     //     .direction({light.direction[0], light.direction[1], light.direction[2]})
-    //     .build(*e, entity);
-    // s->addEntity(entity);
+    //     .build(*static_cast<filament::Engine*>(engine_), entity);
+    // static_cast<filament::Scene*>(scene_)->addEntity(entity);
 #endif
 
     return idx;
