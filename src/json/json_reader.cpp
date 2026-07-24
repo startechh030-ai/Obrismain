@@ -19,7 +19,7 @@ void setAssetManager(void* aam) {
 
 char* JsonReader::loadFromAssets(const char* path) {
     if (!gAssetManager) {
-        LOGE("AssetManager not set! Call obris_set_asset_manager() first");
+        LOGE("AssetManager not set! Call setAssetManager() from JNI first");
         return nullptr;
     }
 

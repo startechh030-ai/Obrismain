@@ -6,6 +6,9 @@
 
 namespace obris {
 
+/// Set the Android asset manager (must be called before any JSON loading).
+void setAssetManager(void* aam);
+
 /// Minimal JSON reader for asset manifests.
 /// Reads JSON files from Android assets and does simple flat key lookups.
 class JsonReader {

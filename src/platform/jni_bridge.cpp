@@ -11,6 +11,7 @@
 
 #define LOG_TAG "ObrisJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 using namespace obris;
 
@@ -35,10 +36,9 @@ Java_com_obris_ObrisActivity_nativeCreate(
     jint width, jint height,
     jstring iblPath) {
 
-    // Set global asset manager
+    // Set global asset manager (for JSON reader and asset loading)
     AAssetManager* aam = AAssetManager_fromJava(env, assetManager);
-    obris_set_asset_manager((void*)aam);
-    JsonReader::setAssetManager((void*)aam);
+    setAssetManager((void*)aam);
 
     // Init crypto
     Crypto::init();

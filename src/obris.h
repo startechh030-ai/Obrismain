@@ -201,9 +201,6 @@ void obris_free(void* ptr);
 //  Platform (JNI callbacks)
 // ══════════════════════════════════════════════════════════════
 
-/// Set the Android asset manager (call from JNI).
-void obris_set_asset_manager(void* assetManager);
-
 #ifdef __cplusplus
 }
 #endif
