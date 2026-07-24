@@ -36,6 +36,8 @@ target_link_libraries(obris_shared
     ${ANDROID_NATIVE_WINDOW_LIBRARY}
     ${ANDROID_OPENGLES_LIBRARY}
     ${ANDROID_EGL_LIBRARY}
+    android                    # AAssetManager_*, ANativeWindow_fromSurface
+    nativewindow               # ANativeWindow_* functions
 )
 
 if(TARGET filament::filament)
