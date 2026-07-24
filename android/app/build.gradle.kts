@@ -13,13 +13,6 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
-        externalNativeBuild {
-            cmake {
-                cppFlags("-std=c++20 -fexceptions -frtti")
-                arguments("-DANDROID_STL=c++_shared", "-DANDROID_PLATFORM=android-26")
-            }
-        }
     }
 
     buildTypes {
@@ -33,12 +26,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    externalNativeBuild {
-        cmake {
-            path = file("../../CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // Native .so is built externally by CI (build-native job) and placed in jniLibs/
     sourceSets {
         getByName("main") { jniLibs.srcDirs("src/main/jniLibs") }
     }
