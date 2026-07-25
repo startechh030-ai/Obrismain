@@ -46,38 +46,75 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK & NDK
+      - name: Setup Android SDK & NDK
         run: |
-          # Install Android command line tools
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
-            -o /tmp/cmdline-tools.zip
-          unzip -q /tmp/cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/
-          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          # GitHub runners have Android SDK at /usr/local/lib/android/sdk/
+          # or sometimes $ANDROID_SDK_ROOT / $ANDROID_HOME
+          if [ -d "/usr/local/lib/android/sdk" ]; then
+            export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          elif [ -n "$ANDROID_SDK_ROOT" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            export ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT"
+          else
+            # Fallback: download cmdline-tools (with retry)
+            export ANDROID_SDK_ROOT="$HOME/android-sdk"
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            for i in 1 2 3; do
+              curl -fsSL --retry 3 "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+                -o /tmp/cmdline-tools.zip && break
+              sleep 2
+            done
+            unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools/"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
 
-          # Accept licenses
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-
-          # Install platform tools, build tools, NDK
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "ndk;27.0.12077973" \
-            "cmake;3.22.1" \
-            > /dev/null 2>&1
-
-          # Set env for subsequent steps
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
-          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Install build prerequisites
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build curl unzip
+          # Find sdkmanager
+          if [ -f "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          elif [ -f "$ANDROID_SDK_ROOT/tools/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_SDK_ROOT/tools/bin/sdkmanager"
+          else
+            echo "sdkmanager not found, checking pre-installed tools..."
+          fi
+
+          # Accept licenses if sdkmanager available
+          if [ -n "${SDKMANAGER:-}" ]; then
+            yes | $SDKMANAGER --licenses > /dev/null 2>&1 || true
+          fi
+
+          # Check if NDK 27 is already installed
+          NDK_PATH=""
+          for candidate in "$ANDROID_SDK_ROOT/ndk/27.0.12077973" "$ANDROID_SDK_ROOT/ndk/27" "$ANDROID_SDK_ROOT/ndk-bundle"; do
+            if [ -f "$candidate/build/cmake/android.toolchain.cmake" ]; then
+              NDK_PATH="$candidate"
+              echo "Found NDK at $NDK_PATH"
+              break
+            fi
+          done
+
+          # If NDK not found, install it
+          if [ -z "$NDK_PATH" ]; then
+            echo "NDK 27 not found. Installing..."
+            if [ -n "${SDKMANAGER:-}" ]; then
+              $SDKMANAGER "ndk;27.0.12077973" > /dev/null 2>&1
+              NDK_PATH="$ANDROID_SDK_ROOT/ndk/27.0.12077973"
+            else
+              echo "ERROR: No sdkmanager and no pre-installed NDK found!"
+              exit 1
+            fi
+          fi
+
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK=$NDK_PATH" >> $GITHUB_ENV
+
+          # Ensure Ninja is available for CMake
+          if ! command -v ninja &>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build 2>/dev/null || true
+          fi
+
+          # Add CMake to path if needed
+          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> $GITHUB_PATH 2>/dev/null || true
 
       - name: Verify tools
         run: |
@@ -155,17 +192,27 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK (for APK build)
+      - name: Setup Android SDK (for APK build)
         run: |
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
-            -o /tmp/cmdline-tools.zip
-          unzip -q /tmp/cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/
-          mv $HOME/android-sdk/cmdline-tools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
-            "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+          # Find pre-installed SDK
+          if [ -d "/usr/local/lib/android/sdk" ]; then
+            export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          elif [ -n "$ANDROID_SDK_ROOT" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            export ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT"
+          else
+            export ANDROID_SDK_ROOT="$HOME/android-sdk"
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            for i in 1 2 3; do
+              curl -fsSL --retry 3 "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+                -o /tmp/cmdline-tools.zip && break
+              sleep 2
+            done
+            unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools/"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+            $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+              "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+          fi
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
