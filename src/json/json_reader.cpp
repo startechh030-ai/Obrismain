@@ -17,6 +17,10 @@ void setAssetManager(void* aam) {
     gAssetManager = static_cast<AAssetManager*>(aam);
 }
 
+void* getAssetManager() {
+    return static_cast<void*>(gAssetManager);
+}
+
 char* JsonReader::loadFromAssets(const char* path) {
     if (!gAssetManager) {
         LOGE("AssetManager not set! Call setAssetManager() from JNI first");

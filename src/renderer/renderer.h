@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <cstdint>
 
 namespace obris {
 
@@ -12,7 +13,8 @@ struct LoadedModel {
     ObrisModel id;
     std::string path;
     void* filamentAsset = nullptr;   // gltfio::FilamentAsset*
-    void* entity = nullptr;          // utils::Entity
+    uint32_t entityCount = 0;
+    void** entities = nullptr;       // utils::Entity[] (pointer array)
     std::string currentAnim;
     float pos[3] = {0,0,0};
     float rot[4] = {0,0,0,1};
@@ -20,9 +22,10 @@ struct LoadedModel {
     bool visible = true;
 };
 
-struct LightData {
+struct LightEntry {
     ObrisLight def;
-    void* lightManager = nullptr;    // filament::LightManager::Builder result
+    uint32_t entity;                 // utils::Entity
+    bool active = false;
 };
 
 class Renderer {
@@ -58,27 +61,30 @@ public:
     void setIBLIntensity(float intensity);
     void setIBLRotation(float degrees);
 
-    // Accessors for JNI
+    // Accessors
     void* engine() const { return engine_; }
+    void* assetLoader() const { return assetLoader_; }
 
 private:
     bool initialized_ = false;
 
-    // Filament handles (opaque)
+    // Filament handles (opaque pointers typed for Filament)
     void* engine_ = nullptr;         // filament::Engine*
     void* renderer_ = nullptr;       // filament::Renderer*
     void* scene_ = nullptr;          // filament::Scene*
     void* view_ = nullptr;           // filament::View*
     void* swapChain_ = nullptr;      // filament::SwapChain*
-    void* cameraEntity_ = nullptr;   // utils::Entity for camera
+    void* camera_ = nullptr;         // filament::Camera*
+    uint32_t cameraEntity_ = 0;      // utils::Entity for the camera
     void* skybox_ = nullptr;         // filament::Skybox*
     void* indirectLight_ = nullptr;  // filament::IndirectLight*
+    void* assetLoader_ = nullptr;    // gltfio::AssetLoader*
 
     // Camera state (our copy)
     ObrisCamera camera_;
 
     // Resources
-    std::vector<LightData> lights_;
+    std::vector<LightEntry> lights_;
     std::unordered_map<ObrisModel, LoadedModel> models_;
     ObrisModel nextModelId_ = 1;
 
@@ -87,13 +93,12 @@ private:
     int height_ = 1280;
 
     // Clear color
-    float clearR_ = 0.1f, clearG_ = 0.1f, clearB_ = 0.2f, clearA_ = 1.0f;
+    float clearR_ = 0.12f, clearG_ = 0.12f, clearB_ = 0.16f, clearA_ = 1.0f;
 
-    // Init helpers
+    // Internal helpers
     bool initFilament(const ObrisConfig& config);
-    void createSceneEntities();
-    void destroySceneEntities();
     void applyCameraToFilament();
+    void applyModelTransform(LoadedModel& model);
 };
 
 } // namespace obris
