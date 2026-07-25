@@ -117,7 +117,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared \
+            -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
             -G Ninja
 
