@@ -9,38 +9,43 @@ find_library(ANDROID_NATIVE_WINDOW_LIBRARY nativewindow)
 find_library(ANDROID_OPENGLES_LIBRARY GLESv3)
 find_library(ANDROID_EGL_LIBRARY EGL)
 
-# ── Filament ──────────────────────────────────────────────────
+# ── Filament (from AAR: libfilament-jni.so has C++ API) ──────
 set(FILAMENT_DIR "${CMAKE_SOURCE_DIR}/third_party/filament")
 if(EXISTS "${FILAMENT_DIR}")
-    file(GLOB FILAMENT_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament.so")
+    file(GLOB FILAMENT_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament-jni.so")
     if(FILAMENT_SO)
         add_library(filament::filament UNKNOWN IMPORTED GLOBAL)
         set_target_properties(filament::filament PROPERTIES
             IMPORTED_LOCATION "${FILAMENT_SO}"
         )
         target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
-        message(STATUS "Obris: ✅ Filament found")
+        message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO}")
 
-        # gltfio
-        file(GLOB GLTFIO_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament-gltfio.so")
+        # gltfio (from AAR)
+        file(GLOB GLTFIO_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libgltfio-jni.so")
         if(GLTFIO_SO)
             add_library(filament::gltfio UNKNOWN IMPORTED GLOBAL)
             set_target_properties(filament::gltfio PROPERTIES IMPORTED_LOCATION "${GLTFIO_SO}")
         endif()
-        # ibl
-        file(GLOB IBL_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament-ibl.so")
-        if(IBL_SO)
-            add_library(filament::ibl UNKNOWN IMPORTED GLOBAL)
-            set_target_properties(filament::ibl PROPERTIES IMPORTED_LOCATION "${IBL_SO}")
-        endif()
     else()
-        message(WARNING "Obris: ❌ Filament not found for ${ANDROID_ABI}")
+        # Fallback: try libfilament.so (older format)
+        file(GLOB FILAMENT_SO_OLD "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament.so")
+        if(FILAMENT_SO_OLD)
+            add_library(filament::filament UNKNOWN IMPORTED GLOBAL)
+            set_target_properties(filament::filament PROPERTIES
+                IMPORTED_LOCATION "${FILAMENT_SO_OLD}"
+            )
+            target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
+            message(STATUS "Obris: ✅ Filament (legacy) found")
+        else()
+            message(WARNING "Obris: ❌ Filament not found for ${ANDROID_ABI}")
+        endif()
     endif()
 else()
     message(WARNING "Obris: ❌ third_party/filament not found")
 endif()
 
-# ── miniaudio ─────────────────────────────────────────────────
+# ── miniaudio (header-only) ──────────────────────────────────
 set(MINIAUDIO_DIR "${CMAKE_SOURCE_DIR}/third_party/miniaudio")
 if(EXISTS "${MINIAUDIO_DIR}/miniaudio.h")
     add_library(miniaudio INTERFACE)
@@ -50,7 +55,7 @@ else()
     message(WARNING "Obris: ❌ miniaudio not found")
 endif()
 
-# ── libsodium ─────────────────────────────────────────────────
+# ── libsodium ────────────────────────────────────────────────
 set(SODIUM_DIR "${CMAKE_SOURCE_DIR}/third_party/libsodium")
 if(EXISTS "${SODIUM_DIR}")
     file(GLOB SODIUM_SO "${SODIUM_DIR}/lib/${ANDROID_ABI}/libsodium.so")

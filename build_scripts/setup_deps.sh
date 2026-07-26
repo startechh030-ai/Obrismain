@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Obris — Third-Party Dependencies Setup
-# Downloads Filament + miniaudio + libsodium for Android
+# Downloads Filament (AAR + headers), miniaudio, libsodium for Android
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OBRIS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 THIRD_DIR="$OBRIS_DIR/third_party"
-JOBS=$(nproc 2>/dev/null || echo 4)
 
 info()  { echo -e "\033[0;36m[INFO]\033[0m  $*"; }
 ok()    { echo -e "\033[0;32m[OK]\033[0m    $*"; }
@@ -23,65 +22,181 @@ setup_miniaudio() {
     local dir="$THIRD_DIR/miniaudio"
     local header="$dir/miniaudio.h"
     mkdir -p "$dir"
-    if [ -f "$header" ] && [ "$(wc -c < "$header")" -gt 100000 ]; then
-        ok "miniaudio already present"; return
-    fi
+    [ -f "$header" ] && [ "$(wc -c < "$header")" -gt 100000 ] && { ok "miniaudio already present"; return; }
     info "Downloading miniaudio..."
     curl -fsSL "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" -o "$header"
-    ok "miniaudio — $(wc -c < "$header") bytes"
+    if [ -f "$header" ] && [ "$(wc -c < "$header")" -gt 100000 ]; then
+        ok "miniaudio — $(wc -c < "$header") bytes"
+    else
+        warn "miniaudio download failed"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2. Filament (prebuilt)
+# 2. Filament — from AAR (for .so) + git (for headers)
 # ══════════════════════════════════════════════════════════════════════════
 setup_filament() {
     local version="1.53.2"
     local out_dir="$THIRD_DIR/filament"
     local any=false
 
+    # Check if already done
     local all_done=true
     for abi in arm64-v8a armeabi-v7a x86_64; do
-        [ ! -f "$out_dir/lib/$abi/libfilament.so" ] && all_done=false
+        [ ! -f "$out_dir/lib/$abi/libfilament-jni.so" ] && all_done=false
     done
-    if [ "$all_done" = true ]; then ok "Filament already downloaded"; return; fi
+    [ ! -f "$out_dir/include/filament/Engine.h" ] && all_done=false
+    if [ "$all_done" = true ]; then ok "Filament already set up"; return; fi
 
     mkdir -p "$out_dir"
 
-    for ABI in arm64-v8a armeabi-v7a x86_64; do
-        local fabi
-        case "$ABI" in arm64-v8a) fabi="aarch64";; armeabi-v7a) fabi="armv7";; x86_64) fabi="x86_64";; esac
+    # ── Download AAR and extract .so files ──────────────────────
+    local aar_url="https://github.com/google/filament/releases/download/v$version/filament-v$version-android.aar"
+    info "Downloading Filament AAR..."
+    if curl -fsSL -o "/tmp/filament.aar" "$aar_url" 2>/dev/null && [ -s "/tmp/filament.aar" ]; then
+        for ABI in arm64-v8a armeabi-v7a x86_64; do
+            mkdir -p "$out_dir/lib/$ABI"
+            unzip -o "/tmp/filament.aar" "jni/$ABI/*" -d "/tmp/fil-aar" 2>/dev/null || true
+            if [ -f "/tmp/fil-aar/jni/$ABI/libfilament-jni.so" ]; then
+                cp "/tmp/fil-aar/jni/$ABI/libfilament-jni.so" "$out_dir/lib/$ABI/"
+                ok "Filament .so $ABI — extracted"
+                any=true
+            fi
+        done
+        rm -f "/tmp/filament.aar"
+    else
+        warn "Filament AAR download failed"
+    fi
 
-        local filename="filament-$version-android-$fabi.tar.gz"
-        local url="https://github.com/google/filament/releases/download/v$version/$filename"
-        local target_dir="$out_dir/lib/$ABI"
-        mkdir -p "$target_dir"
+    # Also download gltfio AAR for its .so
+    curl -fsSL -o "/tmp/gltfio.aar" "https://github.com/google/filament/releases/download/v$version/gltfio-v$version-android.aar" 2>/dev/null && {
+        for ABI in arm64-v8a armeabi-v7a x86_64; do
+            unzip -o "/tmp/gltfio.aar" "jni/$ABI/*" -d "/tmp/fil-aar" 2>/dev/null || true
+            if [ -f "/tmp/fil-aar/jni/$ABI/libgltfio-jni.so" ]; then
+                cp "/tmp/fil-aar/jni/$ABI/libgltfio-jni.so" "$out_dir/lib/$ABI/" 2>/dev/null || true
+            fi
+        done
+        rm -f "/tmp/gltfio.aar"
+    } || true
 
-        info "Downloading Filament $ABI..."
-        if curl -fsSL -o "/tmp/$filename" "$url" && [ -s "/tmp/$filename" ]; then
-            local tmp_dir="/tmp/filament-extract-$ABI"
-            rm -rf "$tmp_dir" && mkdir -p "$tmp_dir"
-            tar -xzf "/tmp/$filename" -C "$tmp_dir" 2>/dev/null || { warn "extract failed"; continue; }
+    # ── Get C++ headers from git repo (shallow, no checkout) ────
+    local HEADERS_DIR="$out_dir/include"
+    if [ ! -f "$HEADERS_DIR/filament/Engine.h" ]; then
+        info "Downloading Filament C++ headers from git..."
+        mkdir -p "$HEADERS_DIR"
 
-            find "$tmp_dir" -name '*.so' -exec cp {} "$target_dir/" \; 2>/dev/null || true
-            find "$tmp_dir" \( -name '*.h' -o -name '*.hpp' \) | while read -r h; do
-                rel="${h#$tmp_dir/}"
-                mkdir -p "$out_dir/include/$(dirname "$rel")"
-                cp "$h" "$out_dir/include/$rel"
-            done 2>/dev/null || true
+        # Download individual header files from GitHub raw
+        # Core Filament headers
+        local HEADER_BASE="https://raw.githubusercontent.com/google/filament/v$version"
+        local HEADER_FILES=(
+            "filament/Engine.h"
+            "filament/Renderer.h"
+            "filament/Scene.h"
+            "filament/View.h"
+            "filament/Camera.h"
+            "filament/SwapChain.h"
+            "filament/LightManager.h"
+            "filament/Skybox.h"
+            "filament/IndirectLight.h"
+            "filament/Texture.h"
+            "filament/MaterialInstance.h"
+            "filament/Color.h"
+            "filament/FilamentAPI.h"
+            "filament/TransformManager.h"
+            "filament/EntityManager.h"
+            "filament/Box.h"
+            "filament/RenderableManager.h"
+            "filament/VertexBuffer.h"
+            "filament/IndexBuffer.h"
+            "filament/RenderTarget.h"
+            "filament/MorphTargetBuffer.h"
+            "filament/BufferObject.h"
+            "filament/Options.h"
+            "filament/DebugRegistry.h"
+            "math/vec3.h"
+            "math/vec4.h"
+            "math/mat4.h"
+            "math/vec2.h"
+            "math/half.h"
+            "math/geometry.h"
+            "math/mat3.h"
+            "math/quat.h"
+            "math/TMatHelpers.h"
+            "math/TVecHelpers.h"
+            "math/TQuatHelpers.h"
+            "math/TMat.h"
+            "math/TVec.h"
+            "math/TQuat.h"
+            "math/norm.h"
+            "math/type_traits.h"
+            "math/compiler.h"
+            "math/common.h"
+            "math/scalar.h"
+            "math/uint2.h"
+            "math/uint3.h"
+            "math/uint4.h"
+            "math/int2.h"
+            "math/int3.h"
+            "math/int4.h"
+            "math/arch.h"
+            "math/fast.h"
+            "math/mathfwd.h"
+            "math/half.h"
+            "utils/Entity.h"
+            "utils/EntityInstance.h"
+            "utils/EntityManager.h"
+            "utils/Allocator.h"
+            "utils/Log.h"
+            "utils/iostream.h"
+            "gltfio/AssetLoader.h"
+            "gltfio/ResourceLoader.h"
+            "gltfio/FilamentAsset.h"
+            "gltfio/Animator.h"
+            "gltfio/FilamentInstance.h"
+            "gltfio/MaterialProvider.h"
+            "gltfio/math.h"
+            "private/backend/DriverApiForward.h"
+        )
 
-            ok "Filament $ABI — done"
+        local OK_COUNT=0
+        for hfile in "${HEADER_FILES[@]}"; do
+            local target="$HEADERS_DIR/$hfile"
+            mkdir -p "$(dirname "$target")"
+            if curl -fsSL -o "$target" "$HEADER_BASE/libs/$hfile" 2>/dev/null || \
+               curl -fsSL -o "$target" "$HEADER_BASE/filament/$hfile" 2>/dev/null || \
+               curl -fsSL -o "$target" "$HEADER_BASE/$hfile" 2>/dev/null; then
+                OK_COUNT=$((OK_COUNT + 1))
+            fi
+        done
+
+        if [ "$OK_COUNT" -gt 10 ]; then
+            ok "Filament headers — $OK_COUNT files downloaded"
             any=true
-            rm -f "/tmp/$filename"
         else
-            warn "Filament $ABI not found"
+            warn "Filament headers — only $OK_COUNT files downloaded (trying alternative)"
+            # Fallback: shallow clone just the include dir
+            rm -rf "$HEADERS_DIR"
+            git clone --depth=1 --branch "v$version" \
+                "https://github.com/google/filament.git" "/tmp/filament-src" 2>/dev/null || true
+            if [ -d "/tmp/filament-src/libs/filament/include" ]; then
+                mkdir -p "$HEADERS_DIR"
+                cp -r "/tmp/filament-src/libs/filament/include/." "$HEADERS_DIR/" 2>/dev/null || true
+                cp -r "/tmp/filament-src/libs/utils/include/." "$HEADERS_DIR/" 2>/dev/null || true
+                cp -r "/tmp/filament-src/libs/math/include/." "$HEADERS_DIR/" 2>/dev/null || true
+                cp -r "/tmp/filament-src/libs/gltfio/include/." "$HEADERS_DIR/" 2>/dev/null || true
+                any=true
+            fi
+            rm -rf "/tmp/filament-src"
         fi
-    done
+    fi
 
-    [ "$any" = false ] && warn "Filament NOT AVAILABLE — stub renderer"
+    if [ "$any" = false ]; then
+        warn "Filament — NOT AVAILABLE (stub renderer)"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# 3. libsodium (prebuilt)
+# 3. libsodium (prebuilt from AAR)
 # ══════════════════════════════════════════════════════════════════════════
 setup_sodium() {
     local version="1.0.20"
@@ -96,16 +211,16 @@ setup_sodium() {
 
     mkdir -p "$out_dir"
 
-    # Try AAR
     info "Downloading libsodium AAR..."
-    local aar_url="https://repo1.maven.org/maven2/org/libsodium/libsodium-android/$version/libsodium-android-$version.aar"
-    if curl -fsSL -o "/tmp/libsodium.aar" "$aar_url" 2>/dev/null && [ -s "/tmp/libsodium.aar" ]; then
+    if curl -fsSL -o "/tmp/libsodium.aar" \
+      "https://repo1.maven.org/maven2/org/libsodium/libsodium-android/$version/libsodium-android-$version.aar" \
+      2>/dev/null && [ -s "/tmp/libsodium.aar" ]; then
         for ABI in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p "$out_dir/lib/$ABI"
             unzip -o "/tmp/libsodium.aar" "jni/$ABI/*" -d "/tmp/ls" 2>/dev/null || true
             [ -f "/tmp/ls/jni/$ABI/libsodium.so" ] && {
                 cp "/tmp/ls/jni/$ABI/libsodium.so" "$out_dir/lib/$ABI/"
-                ok "libsodium $ABI — from AAR"
+                ok "libsodium $ABI"
                 any=true
             }
         done
@@ -115,20 +230,6 @@ setup_sodium() {
         rm -f "/tmp/libsodium.aar"
     fi
 
-    # Try GitHub tarballs
-    if [ "$any" = false ]; then
-        for ABI in arm64-v8a armeabi-v7a x86_64; do
-            local fabi
-            case "$ABI" in arm64-v8a) fabi="arm64-v8a";; armeabi-v7a) fabi="armeabi-v7a";; x86_64) fabi="x86_64";; esac
-            local url="https://github.com/jedisct1/libsodium/releases/download/$version-stable/libsodium-android-$fabi.tar.gz"
-            if curl -fsSL -o "/tmp/ls-$ABI.tar.gz" "$url" 2>/dev/null && [ -s "/tmp/ls-$ABI.tar.gz" ]; then
-                tar -xzf "/tmp/ls-$ABI.tar.gz" -C "/tmp/ls2" 2>/dev/null || true
-                find "/tmp/ls2" -name "libsodium.so" -exec cp {} "$out_dir/lib/$ABI/" \; 2>/dev/null || true
-                any=true
-            fi
-        done
-    fi
-
     # Download headers if missing
     if [ ! -f "$out_dir/include/sodium.h" ]; then
         mkdir -p "$out_dir/include"
@@ -136,8 +237,8 @@ setup_sodium() {
             -o "$out_dir/include/sodium.h" 2>/dev/null || true
     fi
 
-    [ "$any" = false ] && warn "libsodium NOT AVAILABLE — stub encryption"
-    ok "libsodium setup done"
+    [ "$any" = false ] && warn "libsodium — stub"
+    ok "libsodium done"
 }
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -153,7 +254,6 @@ setup_sodium
 
 echo ""
 echo "═══ Done ═══"
-echo "Library status:"
 for lib in miniaudio filament libsodium; do
     so=$(find "$THIRD_DIR/$lib" -name '*.so' 2>/dev/null | wc -l)
     h=$(find "$THIRD_DIR/$lib" \( -name '*.h' -o -name '*.hpp' \) 2>/dev/null | wc -l)
