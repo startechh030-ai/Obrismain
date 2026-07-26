@@ -40,7 +40,7 @@ public:
 
     // Camera
     void setCamera(const ObrisCamera& cam);
-    ObrisCamera getCamera() const { return camera_; }
+    ObrisCamera getCamera() const { return cameraState_; }
 
     // Lights
     int addLight(const ObrisLight& light);
@@ -74,14 +74,14 @@ private:
     void* scene_ = nullptr;          // filament::Scene*
     void* view_ = nullptr;           // filament::View*
     void* swapChain_ = nullptr;      // filament::SwapChain*
-    void* camera_ = nullptr;         // filament::Camera*
+    void* filamentCamera_ = nullptr; // filament::Camera*
     uint32_t cameraEntity_ = 0;      // utils::Entity for the camera
     void* skybox_ = nullptr;         // filament::Skybox*
     void* indirectLight_ = nullptr;  // filament::IndirectLight*
     void* assetLoader_ = nullptr;    // gltfio::AssetLoader*
 
     // Camera state (our copy)
-    ObrisCamera camera_;
+    ObrisCamera cameraState_;
 
     // Resources
     std::vector<LightEntry> lights_;

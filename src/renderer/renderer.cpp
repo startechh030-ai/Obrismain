@@ -66,10 +66,10 @@ bool Renderer::init(const ObrisConfig& config) {
     if (initialized_) return true;
     width_ = config.width;
     height_ = config.height;
-    camera_.near = 0.1f;
-    camera_.far = 1000.0f;
-    camera_.fov = 60.0f;
-    camera_.isPerspective = 1;
+    cameraState_.near = 0.1f;
+    cameraState_.far = 1000.0f;
+    cameraState_.fov = 60.0f;
+    cameraState_.isPerspective = 1;
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     if (!initFilament(config)) {
@@ -119,7 +119,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     void* camEntityPtr = reinterpret_cast<void*>(static_cast<uintptr_t>(
         camEntity.getId()));
     auto* cam = e->createCamera(camEntity);
-    camera_ = cam;
+    filamentCamera_ = cam;
     cam->setProjection(60.0, (double)width_/height_, 0.1, 1000.0);
     cam->lookAt({0, 2.5f, 5}, {0, 1, 0}, {0, 1, 0});
 
@@ -225,7 +225,7 @@ void Renderer::shutdown() {
     scene_ = nullptr;
     view_ = nullptr;
     swapChain_ = nullptr;
-    camera_ = nullptr;
+    filamentCamera_ = nullptr;
     cameraEntity_ = 0;
     indirectLight_ = nullptr;
     skybox_ = nullptr;
@@ -259,10 +259,10 @@ void Renderer::resize(int w, int h) {
         static_cast<filament::View*>(view_)
             ->setViewport({0, 0, (uint32_t)width_, (uint32_t)height_});
     }
-    if (camera_) {
+    if (filamentCamera_) {
         double aspect = (double)width_ / (double)height_;
-        static_cast<filament::Camera*>(camera_)
-            ->setProjection(camera_.fov, aspect, camera_.near, camera_.far);
+        static_cast<filament::Camera*>(filamentCamera_)
+            ->setProjection(cameraState_.fov, aspect, cameraState_.near, cameraState_.far);
     }
 #endif
 }
@@ -272,29 +272,29 @@ void Renderer::resize(int w, int h) {
 // ══════════════════════════════════════════════════════════════
 
 void Renderer::setCamera(const ObrisCamera& cam) {
-    camera_ = cam;
+    filamentCamera_ = cam;
     applyCameraToFilament();
 }
 
 void Renderer::applyCameraToFilament() {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    auto* cam = static_cast<filament::Camera*>(camera_);
+    auto* cam = static_cast<filament::Camera*>(filamentCamera_);
     if (!cam) return;
 
-    filament::math::float3 eye(camera_.x, camera_.y, camera_.z);
-    filament::math::float3 target(camera_.tx, camera_.ty, camera_.tz);
+    filament::math::float3 eye(cameraState_.x, cameraState_.y, cameraState_.z);
+    filament::math::float3 target(cameraState_.tx, cameraState_.ty, cameraState_.tz);
     filament::math::float3 up(0, 1, 0);
 
     cam->lookAt(eye, target, up);
 
     double aspect = (double)width_ / (double)height_;
-    if (camera_.isPerspective) {
-        cam->setProjection(camera_.fov, aspect, camera_.near, camera_.far);
+    if (cameraState_.isPerspective) {
+        cam->setProjection(cameraState_.fov, aspect, cameraState_.near, cameraState_.far);
     } else {
-        float halfH = camera_.far * 0.5f;
+        float halfH = cameraState_.far * 0.5f;
         float halfW = halfH * aspect;
         cam->setProjection(filament::Camera::Projection::ORTHO,
-                           -halfW, halfW, -halfH, halfH, camera_.near, camera_.far);
+                           -halfW, halfW, -halfH, halfH, cameraState_.near, cameraState_.far);
     }
 #endif
 }
