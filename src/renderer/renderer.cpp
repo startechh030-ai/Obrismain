@@ -5,6 +5,7 @@
 #include <android/asset_manager.h>
 #include <cstring>
 #include <cmath>
+#include <jni.h>
 
 #define LOG_TAG "ObrisRender"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -13,6 +14,17 @@
 // Helper: get AAssetManager from our json module
 static AAssetManager* getAam() {
     return static_cast<AAssetManager*>(obris::getAssetManager());
+}
+
+// ── JNI wrappers exported from libfilament-jni.so ────────────
+// These are C functions that we call directly (nullptr for env/class)
+// Filament Engine now uses a Builder pattern:
+extern "C" {
+    jlong Java_com_google_android_filament_Engine_nCreateBuilder(JNIEnv*, jclass);
+    void  Java_com_google_android_filament_Engine_nSetBuilderBackend(JNIEnv*, jclass, jlong builder, jint backend);
+    jlong Java_com_google_android_filament_Engine_nBuilderBuild(JNIEnv*, jclass, jlong builder);
+    void  Java_com_google_android_filament_Engine_nDestroyBuilder(JNIEnv*, jclass, jlong builder);
+    void  Java_com_google_android_filament_Engine_nDestroyEngine(JNIEnv*, jclass, jlong engine);
 }
 
 namespace obris {
@@ -90,13 +102,22 @@ bool Renderer::initFilament(const ObrisConfig& config) {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
 
     using namespace filament;
+    using namespace filament::math;
 
-    // 1. Create Engine
-    Engine::Backend backend = config.useVulkan ?
-        Engine::Backend::VULKAN : Engine::Backend::OPENGL;
-    auto* e = Engine::create(backend);
+    // 1. Create Engine via Builder pattern (JNI wrapper)
+    jlong builder = Java_com_google_android_filament_Engine_nCreateBuilder(nullptr, nullptr);
+    if (!builder) { LOGE("Engine builder creation failed"); return false; }
+    
+    Java_com_google_android_filament_Engine_nSetBuilderBackend(
+        nullptr, nullptr, builder,
+        static_cast<jint>(config.useVulkan ? 1 : 0));
+    
+    auto* e = reinterpret_cast<Engine*>(
+        Java_com_google_android_filament_Engine_nBuilderBuild(nullptr, nullptr, builder));
+    Java_com_google_android_filament_Engine_nDestroyBuilder(nullptr, nullptr, builder);
+    
     engine_ = e;
-    if (!e) { LOGE("Engine::create failed"); return false; }
+    if (!e) { LOGE("Engine::create failed via JNI builder"); return false; }
 
     // 2. Create Renderer
     auto* r = e->createRenderer();
@@ -477,7 +498,11 @@ void Renderer::setModelVisible(ObrisModel id, bool visible) {
     auto* e = static_cast<filament::Engine*>(engine_);
     for (uint32_t i = 0; i < it->second.entityCount; i++) {
         if (it->second.entities[i]) {
-            e->enableEntity(it->second.entities[i], visible);
+            auto inst = e->getRenderableManager().getInstance(
+                (utils::Entity)(uintptr_t)it->second.entities[i]);
+            if (inst) {
+                e->getRenderableManager().setLayerMask(inst, visible ? 0xFF : 0x00, 0xFF);
+            }
         }
     }
 #endif

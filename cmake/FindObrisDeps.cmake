@@ -18,8 +18,13 @@ if(EXISTS "${FILAMENT_DIR}")
         set_target_properties(filament::filament PROPERTIES
             IMPORTED_LOCATION "${FILAMENT_SO}"
         )
-        target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
-        message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO}")
+        # Only add include directory if it exists (headers downloaded separately)
+        if(EXISTS "${FILAMENT_DIR}/include/filament/Engine.h")
+            target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
+            message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO} (with headers)")
+        else()
+            message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO} (without headers — includes won't resolve)")
+        endif()
 
         # gltfio (from AAR)
         file(GLOB GLTFIO_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libgltfio-jni.so")
