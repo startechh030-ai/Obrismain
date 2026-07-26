@@ -272,14 +272,17 @@ void Renderer::resize(int w, int h) {
 // ══════════════════════════════════════════════════════════════
 
 void Renderer::setCamera(const ObrisCamera& cam) {
-    filamentCamera_ = cam;
+    cameraState_ = cam;
     applyCameraToFilament();
 }
 
 void Renderer::applyCameraToFilament() {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     auto* cam = static_cast<filament::Camera*>(filamentCamera_);
-    if (!cam) return;
+    if (!cam) {
+        LOGE("applyCameraToFilament: no camera (was init called?)");
+        return;
+    }
 
     filament::math::float3 eye(cameraState_.x, cameraState_.y, cameraState_.z);
     filament::math::float3 target(cameraState_.tx, cameraState_.ty, cameraState_.tz);
