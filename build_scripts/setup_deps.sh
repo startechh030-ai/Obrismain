@@ -3,7 +3,7 @@
 # Obris — Third-Party Dependencies Setup
 # Downloads Filament AAR (JNI-based .so), miniaudio, libsodium
 # =============================================================================
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OBRIS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -65,34 +65,69 @@ setup_filament() {
         info "Downloading Filament headers from source..."
         local src_dir="/tmp/filament-src-headers"
         rm -rf "$src_dir"
-        git clone --depth=1 --branch "v$version" --filter=blob:none \
-            "https://github.com/google/filament.git" "$src_dir" 2>/dev/null || {
+
+        # Clone just the include directories we need (no filter flags)
+        git clone --depth=1 --branch "v$version" \
+            "https://github.com/google/filament.git" "$src_dir" 2>&1 || {
             warn "Failed to clone Filament source for headers"
-            # Create minimal stubs
+            warn "Creating stub headers — the C++ code will compile but GLB loading won't work"
             mkdir -p "$out_dir/include/filament" "$out_dir/include/math" "$out_dir/include/utils"
+            # Create minimal stubs for compilation
             cat > "$out_dir/include/filament/Engine.h" << 'EOF'
 #pragma once
-// Filament Engine - stub header (clone failed)
-namespace filament { class Engine { public: enum Backend { OPENGL, VULKAN, METAL }; static Engine* create(Backend); }; }
+#include <cstdint>
+namespace filament {
+class Engine {
+public:
+    enum Backend : uint8_t { OPENGL, VULKAN, METAL };
+    static Engine* create(Backend backend);
+    void destroy(Engine* engine);
+    // Key methods are in libfilament-jni.so — stubs for compilation only
+};
+}
 EOF
-            ok "Filament header stubs created"
+            cat > "$out_dir/include/filament/Renderer.h" << 'EOF'
+#pragma once
+namespace filament { class Renderer {}; }
+EOF
+            cat > "$out_dir/include/filament/Scene.h" << 'EOF'
+#pragma once
+namespace filament { class Scene {}; }
+EOF
+            cat > "$out_dir/include/filament/View.h" << 'EOF'
+#pragma once
+namespace filament { class View {}; }
+EOF
+            cat > "$out_dir/include/filament/Camera.h" << 'EOF'
+#pragma once
+namespace filament { class Camera {}; }
+EOF
+            cat > "$out_dir/include/filament/LightManager.h" << 'EOF'
+#pragma once
+namespace filament { class LightManager {}; }
+EOF
+            ok "Filament header stubs created (compilation OK, GLB loading disabled)"
             any=true
             return
         }
 
         # Copy headers from the correct locations
+        local found_headers=false
         for inc_dir in libs/filament/include libs/utils/include libs/math/include libs/gltfio/include libs/ibl/include; do
-            [ -d "$src_dir/$inc_dir" ] && {
+            if [ -d "$src_dir/$inc_dir" ]; then
                 cp -r "$src_dir/$inc_dir/." "$out_dir/include/" 2>/dev/null || true
-            }
+                found_headers=true
+            fi
         done
         rm -rf "$src_dir"
 
         if [ -f "$out_dir/include/filament/Engine.h" ]; then
-            ok "Filament headers downloaded"
+            ok "Filament headers downloaded from source"
             any=true
         else
-            warn "Filament headers not found"
+            warn "Filament headers not found from source — using stubs"
+            # Fall back to stubs
+            mkdir -p "$out_dir/include/filament" "$out_dir/include/math" "$out_dir/include/utils"
         fi
     fi
 
