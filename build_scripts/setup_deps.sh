@@ -60,74 +60,110 @@ setup_filament() {
         } || warn "$aar_name AAR download failed"
     done
 
-    # ── Get C++ headers from source (shallow clone) ─────────────
+    # ── Get C++ headers from GitHub raw URLs ──────────────────
     if [ ! -f "$out_dir/include/filament/Engine.h" ]; then
-        info "Downloading Filament headers from source..."
-        local src_dir="/tmp/filament-src-headers"
-        rm -rf "$src_dir"
+        info "Downloading Filament headers from GitHub raw..."
+        local gh="https://raw.githubusercontent.com/google/filament/v$version"
 
-        # Clone just the include directories we need (no filter flags)
-        git clone --depth=1 --branch "v$version" \
-            "https://github.com/google/filament.git" "$src_dir" 2>&1 || {
-            warn "Failed to clone Filament source for headers"
-            warn "Creating stub headers — the C++ code will compile but GLB loading won't work"
-            mkdir -p "$out_dir/include/filament" "$out_dir/include/math" "$out_dir/include/utils"
-            # Create minimal stubs for compilation
-            cat > "$out_dir/include/filament/Engine.h" << 'EOF'
-#pragma once
-#include <cstdint>
-namespace filament {
-class Engine {
-public:
-    enum Backend : uint8_t { OPENGL, VULKAN, METAL };
-    static Engine* create(Backend backend);
-    void destroy(Engine* engine);
-    // Key methods are in libfilament-jni.so — stubs for compilation only
-};
-}
-EOF
-            cat > "$out_dir/include/filament/Renderer.h" << 'EOF'
-#pragma once
-namespace filament { class Renderer {}; }
-EOF
-            cat > "$out_dir/include/filament/Scene.h" << 'EOF'
-#pragma once
-namespace filament { class Scene {}; }
-EOF
-            cat > "$out_dir/include/filament/View.h" << 'EOF'
-#pragma once
-namespace filament { class View {}; }
-EOF
-            cat > "$out_dir/include/filament/Camera.h" << 'EOF'
-#pragma once
-namespace filament { class Camera {}; }
-EOF
-            cat > "$out_dir/include/filament/LightManager.h" << 'EOF'
-#pragma once
-namespace filament { class LightManager {}; }
-EOF
-            ok "Filament header stubs created (compilation OK, GLB loading disabled)"
-            any=true
-            return
+        # Try each path variant (structure changed across versions)
+        local count=0
+        download_header() {
+            local name="$1"  # relative path inside include dir, e.g. "filament/Engine.h"
+            local dir="$out_dir/include/$(dirname "$name")"
+            mkdir -p "$dir"
+
+            # Try multiple possible repo paths
+            for repo_path in \
+                "filament/include/$name" \
+                "libs/$(dirname "$name")/include/$name" \
+                "libs/$(echo "$name" | cut -d/ -f1)/include/$name" \
+                "libs/filament/include/$name" \
+                "libs/gltfio/include/$name" \
+                "libs/ibl/include/$name" \
+                "libs/utils/include/$name" \
+                "filament/backend/include/$name"; do
+                if curl -fsSL -o "$dir/$(basename "$name")" "$gh/$repo_path" 2>/dev/null; then
+                    count=$((count + 1))
+                    return 0
+                fi
+            done
+            warn "  missed: $name"
+            return 1
         }
 
-        # Copy headers from the correct locations
-        local found_headers=false
-        for inc_dir in libs/filament/include libs/utils/include libs/math/include libs/gltfio/include libs/ibl/include; do
-            if [ -d "$src_dir/$inc_dir" ]; then
-                cp -r "$src_dir/$inc_dir/." "$out_dir/include/" 2>/dev/null || true
-                found_headers=true
-            fi
-        done
-        rm -rf "$src_dir"
+        download_header "filament/Engine.h"
+        download_header "filament/Renderer.h"
+        download_header "filament/Scene.h"
+        download_header "filament/View.h"
+        download_header "filament/Camera.h"
+        download_header "filament/SwapChain.h"
+        download_header "filament/LightManager.h"
+        download_header "filament/Skybox.h"
+        download_header "filament/IndirectLight.h"
+        download_header "filament/Texture.h"
+        download_header "filament/Color.h"
+        download_header "filament/FilamentAPI.h"
+        download_header "filament/TransformManager.h"
+        download_header "filament/RenderableManager.h"
+        download_header "filament/VertexBuffer.h"
+        download_header "filament/IndexBuffer.h"
+        download_header "filament/Material.h"
+        download_header "filament/MaterialInstance.h"
+        download_header "filament/RenderTarget.h"
+        download_header "filament/Options.h"
+        download_header "filament/Box.h"
+        download_header "filament/Viewport.h"
+        download_header "filament/Frustum.h"
+        download_header "filament/ColorGrading.h"
+        download_header "utils/Entity.h"
+        download_header "utils/EntityInstance.h"
+        download_header "utils/EntityManager.h"
+        download_header "utils/Invocable.h"
+        download_header "utils/Allocator.h"
+        download_header "utils/Log.h"
+        download_header "utils/iostream.h"
+        download_header "utils/compiler.h"
+        download_header "utils/Panic.h"
+        download_header "math/mathfwd.h"
+        download_header "math/vec2.h"
+        download_header "math/vec3.h"
+        download_header "math/vec4.h"
+        download_header "math/mat4.h"
+        download_header "math/mat3.h"
+        download_header "math/quat.h"
+        download_header "math/geometry.h"
+        download_header "math/half.h"
+        download_header "math/TMatHelpers.h"
+        download_header "math/TVecHelpers.h"
+        download_header "math/TQuatHelpers.h"
+        download_header "math/TMat.h"
+        download_header "math/TVec.h"
+        download_header "math/TQuat.h"
+        download_header "math/norm.h"
+        download_header "math/type_traits.h"
+        download_header "math/compiler.h"
+        download_header "math/common.h"
+        download_header "math/scalar.h"
+        download_header "math/fast.h"
+        download_header "gltfio/AssetLoader.h"
+        download_header "gltfio/FilamentAsset.h"
+        download_header "gltfio/ResourceLoader.h"
+        download_header "gltfio/Animator.h"
+        download_header "gltfio/math.h"
+        download_header "ibl/Cubemap.h"
 
-        if [ -f "$out_dir/include/filament/Engine.h" ]; then
-            ok "Filament headers downloaded from source"
+        # Backend headers (special path)
+        mkdir -p "$out_dir/include/private/backend"
+        for bp in "filament/backend/include/private/backend/DriverApiForward.h" \
+                   "libs/filament/backend/include/private/backend/DriverApiForward.h"; do
+            curl -fsSL -o "$out_dir/include/private/backend/DriverApiForward.h" "$gh/$bp" 2>/dev/null && { count=$((count+1)); break; }
+        done
+
+        if [ "$count" -gt 20 ]; then
+            ok "Filament headers — $count files downloaded"
             any=true
         else
-            warn "Filament headers not found from source — using stubs"
-            # Fall back to stubs
-            mkdir -p "$out_dir/include/filament" "$out_dir/include/math" "$out_dir/include/utils"
+            warn "Filament headers — only $count downloaded (need 20+)"
         fi
     fi
 
