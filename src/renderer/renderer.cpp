@@ -1,5 +1,6 @@
 #include "renderer.h"
 #include "json/json_reader.h"
+#include "filament_stubs.h"
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/asset_manager.h>

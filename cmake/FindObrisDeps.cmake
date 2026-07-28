@@ -1,6 +1,5 @@
 # =============================================================================
 # Obris - Dependency Discovery
-# Looks in third_party/ for Filament, miniaudio, libsodium
 # =============================================================================
 
 find_library(ANDROID_LOG_LIBRARY log REQUIRED)
@@ -9,7 +8,7 @@ find_library(ANDROID_NATIVE_WINDOW_LIBRARY nativewindow)
 find_library(ANDROID_OPENGLES_LIBRARY GLESv3)
 find_library(ANDROID_EGL_LIBRARY EGL)
 
-# ── Filament (from AAR: libfilament-jni.so has C++ API) ──────
+# ── Filament (.so only — we provide our own stubs via filament_stubs.h) ──
 set(FILAMENT_DIR "${CMAKE_SOURCE_DIR}/third_party/filament")
 if(EXISTS "${FILAMENT_DIR}")
     file(GLOB FILAMENT_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament-jni.so")
@@ -18,33 +17,16 @@ if(EXISTS "${FILAMENT_DIR}")
         set_target_properties(filament::filament PROPERTIES
             IMPORTED_LOCATION "${FILAMENT_SO}"
         )
-        # Only add include directory if it exists (headers downloaded separately)
-        if(EXISTS "${FILAMENT_DIR}/include/filament/Engine.h")
-            target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
-            message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO} (with headers)")
-        else()
-            message(STATUS "Obris: ✅ Filament found at ${FILAMENT_SO} (without headers — includes won't resolve)")
-        endif()
-
-        # gltfio (from AAR)
+        message(STATUS "Obris: ✅ Filament .so found at ${FILAMENT_SO}")
+        # gltfio
         file(GLOB GLTFIO_SO "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libgltfio-jni.so")
         if(GLTFIO_SO)
             add_library(filament::gltfio UNKNOWN IMPORTED GLOBAL)
             set_target_properties(filament::gltfio PROPERTIES IMPORTED_LOCATION "${GLTFIO_SO}")
+            message(STATUS "Obris: ✅ gltfio .so found")
         endif()
     else()
-        # Fallback: try libfilament.so (older format)
-        file(GLOB FILAMENT_SO_OLD "${FILAMENT_DIR}/lib/${ANDROID_ABI}/libfilament.so")
-        if(FILAMENT_SO_OLD)
-            add_library(filament::filament UNKNOWN IMPORTED GLOBAL)
-            set_target_properties(filament::filament PROPERTIES
-                IMPORTED_LOCATION "${FILAMENT_SO_OLD}"
-            )
-            target_include_directories(filament::filament INTERFACE "${FILAMENT_DIR}/include")
-            message(STATUS "Obris: ✅ Filament (legacy) found")
-        else()
-            message(WARNING "Obris: ❌ Filament not found for ${ANDROID_ABI}")
-        endif()
+        message(WARNING "Obris: ❌ Filament .so not found for ${ANDROID_ABI}")
     endif()
 else()
     message(WARNING "Obris: ❌ third_party/filament not found")

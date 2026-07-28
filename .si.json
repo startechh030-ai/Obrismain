@@ -5,6 +5,14 @@
     ".yml": {
       "enabled": false,
       "run": "yaml-language-server --stdio"
+    },
+    ".cpp": {
+      "enabled": true,
+      "run": "clangd"
+    },
+    ".h": {
+      "enabled": false,
+      "run": "clangd"
     }
   }
 }
