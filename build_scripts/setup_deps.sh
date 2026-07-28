@@ -15,28 +15,22 @@ warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 
 mkdir -p "$THIRD_DIR"
 
-# ═══════════════════════════════════════════════════
-# 1. miniaudio (single header)
-# ═══════════════════════════════════════════════════
 setup_miniaudio() {
     local dir="$THIRD_DIR/miniaudio"
     local header="$dir/miniaudio.h"
     mkdir -p "$dir"
     [ -f "$header" ] && [ "$(wc -c < "$header")" -gt 100000 ] && { ok "miniaudio already present"; return; }
     info "Downloading miniaudio..."
-    curl -fsSL "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" -o "$header"
+    curl -fsSL "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" -o "$header" || true
     [ -f "$header" ] && [ "$(wc -c < "$header")" -gt 100000 ] && ok "miniaudio — $(wc -c < "$header") bytes" || warn "miniaudio download failed"
 }
 
-# ═══════════════════════════════════════════════════
-# 2. Filament
-# ═══════════════════════════════════════════════════
 setup_filament() {
     local version="1.53.2"
     local out_dir="$THIRD_DIR/filament"
     local any=false
 
-    # Check already done
+    # Check .so files
     local all_done=true
     for abi in arm64-v8a armeabi-v7a x86_64; do
         [ ! -f "$out_dir/lib/$abi/libfilament-jni.so" ] && all_done=false
@@ -44,9 +38,9 @@ setup_filament() {
     [ ! -f "$out_dir/include/filament/Engine.h" ] && all_done=false
     if [ "$all_done" = true ]; then ok "Filament already set up"; return; fi
 
-    mkdir -p "$out_dir"
+    mkdir -p "$out_dir/lib" "$out_dir/include"
 
-    # ── Download AARs and extract .so files ────────────────────
+    # ── Download AARs and extract .so ─────────────────────
     for aar_name in filament gltfio filamat; do
         local aar_url="https://github.com/google/filament/releases/download/v$version/${aar_name}-v$version-android.aar"
         info "Downloading $aar_name AAR..."
@@ -63,99 +57,62 @@ setup_filament() {
         fi
     done
 
-    # ── Download headers via Python ────────────────────────────
+    # ── Download real C++ headers ──────────────────────────
     if [ ! -f "$out_dir/include/filament/Engine.h" ]; then
-        info "Downloading Filament headers via python..."
-        if python3 -c "
-import os, subprocess
-base = 'https://raw.githubusercontent.com/google/filament/v1.53.2'
-inc = '$out_dir/include'
-paths = [
-    ('filament/include/filament/Engine.h', 'filament/Engine.h'),
-    ('filament/include/filament/Renderer.h', 'filament/Renderer.h'),
-    ('filament/include/filament/Scene.h', 'filament/Scene.h'),
-    ('filament/include/filament/View.h', 'filament/View.h'),
-    ('filament/include/filament/Camera.h', 'filament/Camera.h'),
-    ('filament/include/filament/SwapChain.h', 'filament/SwapChain.h'),
-    ('filament/include/filament/LightManager.h', 'filament/LightManager.h'),
-    ('filament/include/filament/Skybox.h', 'filament/Skybox.h'),
-    ('filament/include/filament/IndirectLight.h', 'filament/IndirectLight.h'),
-    ('filament/include/filament/Texture.h', 'filament/Texture.h'),
-    ('filament/include/filament/Color.h', 'filament/Color.h'),
-    ('filament/include/filament/FilamentAPI.h', 'filament/FilamentAPI.h'),
-    ('filament/include/filament/TransformManager.h', 'filament/TransformManager.h'),
-    ('filament/include/filament/RenderableManager.h', 'filament/RenderableManager.h'),
-    ('libs/utils/include/utils/Entity.h', 'utils/Entity.h'),
-    ('libs/utils/include/utils/EntityInstance.h', 'utils/EntityInstance.h'),
-    ('libs/utils/include/utils/EntityManager.h', 'utils/EntityManager.h'),
-    ('libs/utils/include/utils/Allocator.h', 'utils/Allocator.h'),
-    ('libs/utils/include/utils/Log.h', 'utils/Log.h'),
-    ('libs/math/include/math/mathfwd.h', 'math/mathfwd.h'),
-    ('libs/math/include/math/vec2.h', 'math/vec2.h'),
-    ('libs/math/include/math/vec3.h', 'math/vec3.h'),
-    ('libs/math/include/math/vec4.h', 'math/vec4.h'),
-    ('libs/math/include/math/mat4.h', 'math/mat4.h'),
-    ('libs/math/include/math/mat3.h', 'math/mat3.h'),
-    ('libs/math/include/math/quat.h', 'math/quat.h'),
-    ('libs/math/include/math/geometry.h', 'math/geometry.h'),
-    ('libs/math/include/math/half.h', 'math/half.h'),
-    ('libs/math/include/math/TMatHelpers.h', 'math/TMatHelpers.h'),
-    ('libs/math/include/math/TVecHelpers.h', 'math/TVecHelpers.h'),
-    ('libs/math/include/math/TQuatHelpers.h', 'math/TQuatHelpers.h'),
-    ('libs/math/include/math/TMat.h', 'math/TMat.h'),
-    ('libs/math/include/math/TVec.h', 'math/TVec.h'),
-    ('libs/math/include/math/TQuat.h', 'math/TQuat.h'),
-    ('libs/gltfio/include/gltfio/AssetLoader.h', 'gltfio/AssetLoader.h'),
-    ('libs/gltfio/include/gltfio/FilamentAsset.h', 'gltfio/FilamentAsset.h'),
-    ('libs/gltfio/include/gltfio/ResourceLoader.h', 'gltfio/ResourceLoader.h'),
-    ('libs/gltfio/include/gltfio/Animator.h', 'gltfio/Animator.h'),
-]
-count = 0
-for rp, lp in paths:
-    target = os.path.join(inc, lp)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    r = subprocess.run(['curl', '-fsSL', '-o', target, base + '/' + rp], capture_output=True)
-    if r.returncode == 0 and os.path.getsize(target) > 10:
-        count += 1
-print(f'{count}/{len(paths)}')
-exit(0 if count > 25 else 1)
-" 2>&1; then
-            ok "Filament headers downloaded"
-            any=true
-        else
-            warn "Header download partial — continuing with stubs"
-        fi
+        info "Downloading Filament headers..."
+
+        local gh="https://raw.githubusercontent.com/google/filament/v$version"
+
+        # Core Filament headers (from filament/include/filament/)
+        local fil_headers="Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure"
+        local count=0
+        for h in $fil_headers; do
+            mkdir -p "$out_dir/include/filament"
+            if curl -fsSL -o "$out_dir/include/filament/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        done
+
+        # Math headers (from libs/math/include/math/)
+        local math_headers="mathfwd vec2 vec3 vec4 mat4 mat3 quat geometry half TMatHelpers TVecHelpers TQuatHelpers TMat TVec TQuat norm type_traits compiler common scalar fast"
+        for h in $math_headers; do
+            mkdir -p "$out_dir/include/math"
+            if curl -fsSL -o "$out_dir/include/math/$h.h" "$gh/libs/math/include/math/$h.h" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        done
+
+        # Utils headers (from libs/utils/include/utils/)
+        local utils_headers="Entity EntityInstance EntityManager Invocable Allocator"
+        for h in $utils_headers; do
+            mkdir -p "$out_dir/include/utils"
+            if curl -fsSL -o "$out_dir/include/utils/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        done
+
+        # gltfio headers (from libs/gltfio/include/gltfio/)
+        local gltfio_headers="AssetLoader FilamentAsset ResourceLoader Animator"
+        for h in $gltfio_headers; do
+            mkdir -p "$out_dir/include/gltfio"
+            if curl -fsSL -o "$out_dir/include/gltfio/$h.h" "$gh/libs/gltfio/include/gltfio/$h.h" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        done
+
+        ok "Filament headers — $count files"
+        any=true
     fi
 
-    # ── Create stubs for missing headers ───────────────────────
-    if [ ! -f "$out_dir/include/filament/Engine.h" ]; then
-        warn "No headers at all — creating minimal stubs for compilation"
-        mkdir -p "$out_dir/include/filament" "$out_dir/include/utils" "$out_dir/include/math" "$out_dir/include/gltfio"
-        cat > "$out_dir/include/filament/Engine.h" << 'STUB'
-#pragma once
-#include <cstdint>
-namespace filament {
-    class Engine { public: enum Backend : uint8_t { OPENGL = 0, VULKAN = 1, METAL = 2 }; };
-    class Renderer {};
-    class Scene {};
-    class View {};
-    class Camera {};
-}
-STUB
-    fi
-
-    # ── Verify ─────────────────────────────────────────────────
+    # ── Verify ─────────────────────────────────────────────
     for ABI in arm64-v8a armeabi-v7a x86_64; do
-        local sz_file="$out_dir/lib/$ABI/libfilament-jni.so"
-        [ -f "$sz_file" ] && ok "Filament $ABI — $(wc -c < "$sz_file") bytes"
+        local f="$out_dir/lib/$ABI/libfilament-jni.so"
+        [ -f "$f" ] && ok "Filament $ABI — $(wc -c < "$f") bytes"
     done
-    [ -f "$out_dir/include/filament/Engine.h" ] && ok "Filament headers present"
-    [ "$any" = false ] && warn "Filament — NOT AVAILABLE (stub renderer)"
+    [ -f "$out_dir/include/filament/Engine.h" ] && ok "filament/Engine.h ready"
+    [ "$any" = false ] && warn "Filament — NOT AVAILABLE (stub)"
 }
 
-# ═══════════════════════════════════════════════════
-# 3. libsodium
-# ═══════════════════════════════════════════════════
 setup_sodium() {
     local version="1.0.20"
     local out_dir="$THIRD_DIR/libsodium"
@@ -185,11 +142,9 @@ setup_sodium() {
         mkdir -p "$out_dir/include"
         curl -fsSL "https://raw.githubusercontent.com/jedisct1/libsodium/1.0.20-stable/src/libsodium/include/sodium.h" -o "$out_dir/include/sodium.h" 2>/dev/null || true
     }
-    [ "$any" = false ] && warn "libsodium — NOT AVAILABLE (stub encryption)" || ok "libsodium done"
+    [ "$any" = false ] && warn "libsodium — NOT AVAILABLE (stub)" || ok "libsodium done"
 }
 
-# ═══════════════════════════════════════════════════
-# Main
 # ═══════════════════════════════════════════════════
 echo ""; echo "═══ Obris — Third-Party Setup ═══"; echo ""
 setup_miniaudio; setup_filament; setup_sodium
