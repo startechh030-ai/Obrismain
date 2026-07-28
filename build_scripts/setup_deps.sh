@@ -83,10 +83,19 @@ setup_filament() {
         done
 
         # Utils headers (from libs/utils/include/utils/)
-        local utils_headers="Entity EntityInstance EntityManager Invocable Allocator"
+        local utils_headers="Entity EntityInstance EntityManager Invocable Allocator compiler Log PrivateImplementation BitmaskEnum unwindows Panic iostream ostream FixedCapacityVector CountDownLatch Path Systrace debug CallStack CString sstream"
         for h in $utils_headers; do
             mkdir -p "$out_dir/include/utils"
             if curl -fsSL -o "$out_dir/include/utils/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        done
+
+        # Backend headers (from filament/backend/include/backend/)
+        local backend_headers="DriverEnums Platform PresentCallable"
+        for h in $backend_headers; do
+            mkdir -p "$out_dir/include/backend"
+            if curl -fsSL -o "$out_dir/include/backend/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null; then
                 count=$((count + 1))
             fi
         done
