@@ -57,56 +57,55 @@ setup_filament() {
         fi
     done
 
-    # ── Download real C++ headers ──────────────────────────
+    # ── Download all C++ headers ─────────────────────────────
     if [ ! -f "$out_dir/include/filament/Engine.h" ]; then
         info "Downloading Filament headers..."
-
         local gh="https://raw.githubusercontent.com/google/filament/v$version"
-
-        # Core Filament headers (from filament/include/filament/)
-        local fil_headers="Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure"
         local count=0
-        for h in $fil_headers; do
-            mkdir -p "$out_dir/include/filament"
-            if curl -fsSL -o "$out_dir/include/filament/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null; then
-                count=$((count + 1))
-            fi
+
+        # filament/include/filament/
+        local fil_dir="$out_dir/include/filament"
+        mkdir -p "$fil_dir"
+        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure; do
+            curl -fsSL -o "$fil_dir/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null && count=$((count+1))
         done
 
-        # Math headers (from libs/math/include/math/)
-        local math_headers="mathfwd vec2 vec3 vec4 mat4 mat3 quat geometry half TMatHelpers TVecHelpers TQuatHelpers TMat TVec TQuat norm type_traits compiler common scalar fast"
-        for h in $math_headers; do
-            mkdir -p "$out_dir/include/math"
-            if curl -fsSL -o "$out_dir/include/math/$h.h" "$gh/libs/math/include/math/$h.h" 2>/dev/null; then
-                count=$((count + 1))
-            fi
+        # libs/utils/include/utils/ + subdirs
+        local utils_dir="$out_dir/include/utils"
+        mkdir -p "$utils_dir/linux" "$utils_dir/generic" "$utils_dir/android" "$utils_dir/darwin" "$utils_dir/win32"
+        for h in Allocator BitmaskEnum CString CallStack Condition CountDownLatch CyclicBarrier Entity EntityInstance EntityManager FixedCapacityVector FixedCircularBuffer Hash Invocable JobSystem Log Mutex NameComponentManager Panic Path PrivateImplementation Profiler QuadTree Range RangeMap SingleInstanceComponentManager Slice Stopwatch StructureOfArrays Systrace ThermalManager ThreadUtils WorkStealingDequeue Zip2Iterator algorithm api_level architecture ashmem bitset compiler compressed_pair debug memalign ostream sstream string trap unwindows vector; do
+            curl -fsSL -o "$utils_dir/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null && count=$((count+1))
+        done
+        # Platform-specific
+        for h in Condition Mutex; do
+            curl -fsSL -o "$utils_dir/linux/$h.h" "$gh/libs/utils/include/utils/linux/$h.h" 2>/dev/null && count=$((count+1))
+            curl -fsSL -o "$utils_dir/generic/$h.h" "$gh/libs/utils/include/utils/generic/$h.h" 2>/dev/null && count=$((count+1))
+        done
+        for h in PerformanceHintManager Systrace ThermalManager; do
+            curl -fsSL -o "$utils_dir/android/$h.h" "$gh/libs/utils/include/utils/android/$h.h" 2>/dev/null && count=$((count+1))
+        done
+        curl -fsSL -o "$utils_dir/darwin/Systrace.h" "$gh/libs/utils/include/utils/darwin/Systrace.h" 2>/dev/null && count=$((count+1))
+        curl -fsSL -o "$utils_dir/win32/stdtypes.h" "$gh/libs/utils/include/utils/win32/stdtypes.h" 2>/dev/null && count=$((count+1))
+
+        # libs/math/include/math/
+        local math_dir="$out_dir/include/math"
+        mkdir -p "$math_dir"
+        for h in mathfwd vec2 vec3 vec4 mat4 mat3 quat geometry half TMatHelpers TVecHelpers TQuatHelpers TMat TVec TQuat norm type_traits compiler common scalar fast int2 int3 int4 uint2 uint3 uint4; do
+            curl -fsSL -o "$math_dir/$h.h" "$gh/libs/math/include/math/$h.h" 2>/dev/null && count=$((count+1))
         done
 
-        # Utils headers (from libs/utils/include/utils/)
-        local utils_headers="Entity EntityInstance EntityManager Invocable Allocator compiler Log PrivateImplementation BitmaskEnum unwindows Panic iostream ostream FixedCapacityVector CountDownLatch Path Systrace debug CallStack CString sstream"
-        for h in $utils_headers; do
-            mkdir -p "$out_dir/include/utils"
-            if curl -fsSL -o "$out_dir/include/utils/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null; then
-                count=$((count + 1))
-            fi
+        # filament/backend/include/backend/
+        local backend_dir="$out_dir/include/backend"
+        mkdir -p "$backend_dir"
+        for h in DriverEnums Platform PresentCallable; do
+            curl -fsSL -o "$backend_dir/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null && count=$((count+1))
         done
 
-        # Backend headers (from filament/backend/include/backend/)
-        local backend_headers="DriverEnums Platform PresentCallable"
-        for h in $backend_headers; do
-            mkdir -p "$out_dir/include/backend"
-            if curl -fsSL -o "$out_dir/include/backend/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null; then
-                count=$((count + 1))
-            fi
-        done
-
-        # gltfio headers (from libs/gltfio/include/gltfio/)
-        local gltfio_headers="AssetLoader FilamentAsset ResourceLoader Animator"
-        for h in $gltfio_headers; do
-            mkdir -p "$out_dir/include/gltfio"
-            if curl -fsSL -o "$out_dir/include/gltfio/$h.h" "$gh/libs/gltfio/include/gltfio/$h.h" 2>/dev/null; then
-                count=$((count + 1))
-            fi
+        # libs/gltfio/include/gltfio/
+        local gltfio_dir="$out_dir/include/gltfio"
+        mkdir -p "$gltfio_dir"
+        for h in AssetLoader FilamentAsset ResourceLoader Animator math; do
+            curl -fsSL -o "$gltfio_dir/$h.h" "$gh/libs/gltfio/include/gltfio/$h.h" 2>/dev/null && count=$((count+1))
         done
 
         ok "Filament headers — $count files"
