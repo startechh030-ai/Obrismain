@@ -66,8 +66,12 @@ setup_filament() {
         # filament/include/filament/
         local fil_dir="$out_dir/include/filament"
         mkdir -p "$fil_dir"
-        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure; do
+        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure ToneMapper; do
             curl -fsSL -o "$fil_dir/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null && count=$((count+1))
+        done
+        # libs/filabridge/include/filament/ (MaterialEnums lives here, not in main filament dir)
+        for h in MaterialEnums; do
+            curl -fsSL -o "$fil_dir/$h.h" "$gh/libs/filabridge/include/filament/$h.h" 2>/dev/null && count=$((count+1))
         done
 
         # libs/utils/include/utils/ + subdirs
@@ -97,7 +101,7 @@ setup_filament() {
         # filament/backend/include/backend/
         local backend_dir="$out_dir/include/backend"
         mkdir -p "$backend_dir"
-        for h in DriverEnums Platform PresentCallable; do
+        for h in DriverEnums Platform PresentCallable CallbackHandler PixelBufferDescriptor; do
             curl -fsSL -o "$backend_dir/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null && count=$((count+1))
         done
 
