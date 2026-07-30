@@ -66,7 +66,7 @@ setup_filament() {
         # filament/include/filament/
         local fil_dir="$out_dir/include/filament"
         mkdir -p "$fil_dir"
-        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure ToneMapper; do
+        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight LightManager Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure ToneMapper; do
             curl -fsSL -o "$fil_dir/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null && count=$((count+1))
         done
         # libs/filabridge/include/filament/ (MaterialEnums lives here, not in main filament dir)

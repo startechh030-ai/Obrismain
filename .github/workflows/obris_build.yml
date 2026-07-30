@@ -148,6 +148,21 @@ jobs:
             echo "  $dir: $so_count .so, $h_count headers"
           done
 
+          # Ensure all critical headers exist even on cache hit (cache may be stale)
+          if [ -d "third_party/filament/include" ]; then
+            CRITICAL_FILES="filament/Engine.h filament/Renderer.h filament/Scene.h filament/View.h filament/Camera.h filament/SwapChain.h filament/LightManager.h filament/Skybox.h filament/IndirectLight.h filament/Texture.h filament/Color.h filament/TransformManager.h filament/RenderableManager.h filament/Options.h filament/Box.h filament/Viewport.h filament/Frustum.h"
+            MISSING=""
+            for f in $CRITICAL_FILES; do
+              if [ ! -f "third_party/filament/include/$f" ]; then
+                MISSING="$MISSING $f"
+              fi
+            done
+            if [ -n "$MISSING" ]; then
+              echo "Missing critical headers:$MISSING — re-running setup..."
+              bash build_scripts/setup_deps.sh
+            fi
+          fi
+
       - name: Configure CMake
         run: |
           cmake -B build/${{ matrix.abi }} \
