@@ -7,14 +7,19 @@
 #include <unordered_map>
 #include <cstdint>
 
+// Forward declarations for Filament / Utils types
+namespace utils {
+class Entity;
+}
+
 namespace obris {
 
 struct LoadedModel {
-    ObrisModel id;
+    ObrisModel id = 0;
     std::string path;
     void* filamentAsset = nullptr;   // gltfio::FilamentAsset*
     uint32_t entityCount = 0;
-    void** entities = nullptr;       // utils::Entity[] (pointer array)
+    void* entities = nullptr;        // Allocated utils::Entity[] array (stored as opaque void*)
     std::string currentAnim;
     float pos[3] = {0,0,0};
     float rot[4] = {0,0,0,1};
@@ -24,7 +29,7 @@ struct LoadedModel {
 
 struct LightEntry {
     ObrisLight def;
-    uint32_t entity;                 // utils::Entity
+    uint32_t entityId = 0;           // utils::Entity mIdentity integer
     bool active = false;
 };
 
@@ -68,19 +73,19 @@ public:
 private:
     bool initialized_ = false;
 
-    // Filament handles (opaque pointers typed for Filament)
+    // Filament handles (opaque pointers)
     void* engine_ = nullptr;         // filament::Engine*
     void* renderer_ = nullptr;       // filament::Renderer*
     void* scene_ = nullptr;          // filament::Scene*
     void* view_ = nullptr;           // filament::View*
     void* swapChain_ = nullptr;      // filament::SwapChain*
     void* filamentCamera_ = nullptr; // filament::Camera*
-    uint32_t cameraEntity_ = 0;      // utils::Entity for the camera
+    uint32_t cameraEntity_ = 0;      // utils::Entity ID for camera
     void* skybox_ = nullptr;         // filament::Skybox*
     void* indirectLight_ = nullptr;  // filament::IndirectLight*
     void* assetLoader_ = nullptr;    // gltfio::AssetLoader*
 
-    // Camera state (our copy)
+    // Camera state
     ObrisCamera cameraState_;
 
     // Resources

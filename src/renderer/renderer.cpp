@@ -23,6 +23,7 @@
 #include <math/vec4.h>
 #include <math/mat4.h>
 #include <math/mat3.h>
+#include <math/quat.h>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/asset_manager.h>
@@ -40,8 +41,6 @@ static AAssetManager* getAam() {
 }
 
 // ── JNI wrappers exported from libfilament-jni.so ────────────
-// These are C functions that we call directly (nullptr for env/class)
-// Filament Engine now uses a Builder pattern:
 extern "C" {
     jlong Java_com_google_android_filament_Engine_nCreateBuilder(JNIEnv*, jclass);
     void  Java_com_google_android_filament_Engine_nSetBuilderBackend(JNIEnv*, jclass, jlong builder, jint backend);
@@ -53,41 +52,7 @@ extern "C" {
 namespace obris {
 
 // ══════════════════════════════════════════════════════════════
-//  Normalize 3-component vector in place
-// ══════════════════════════════════════════════════════════════
-static void normalizeVec3(float* v) {
-    float len = std::sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-    if (len > 0.0001f) { v[0] /= len; v[1] /= len; v[2] /= len; }
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Quaternion multiplication (a * b)
-// ══════════════════════════════════════════════════════════════
-static void mulQuat(const float a[4], const float b[4], float out[4]) {
-    out[0] = a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1];
-    out[1] = a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0];
-    out[2] = a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3];
-    out[3] = a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2];
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Euler angles (yaw, pitch) to quaternion
-// ══════════════════════════════════════════════════════════════
-static void eulerToQuat(float yawRad, float pitchRad, float rollRad, float q[4]) {
-    float cy = std::cos(yawRad * 0.5f);
-    float sy = std::sin(yawRad * 0.5f);
-    float cp = std::cos(pitchRad * 0.5f);
-    float sp = std::sin(pitchRad * 0.5f);
-    float cr = std::cos(rollRad * 0.5f);
-    float sr = std::sin(rollRad * 0.5f);
-    q[0] = sr * cp * cy - cr * sp * sy;
-    q[1] = cr * sp * cy + sr * cp * sy;
-    q[2] = cr * cp * sy - sr * sp * cy;
-    q[3] = cr * cp * cy + sr * sp * sy;
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Renderer
+//  Renderer Constructor / Destructor
 // ══════════════════════════════════════════════════════════════
 
 Renderer::Renderer() { LOGI("Renderer created"); }
@@ -150,7 +115,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     // 3. Create SwapChain
     auto* sw = e->createSwapChain(
         static_cast<ANativeWindow*>(config.nativeWindow),
-        SwapChain::CONFIG_HAS_STENCIL_BITS);
+        SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     swapChain_ = sw;
     if (!sw) { LOGE("createSwapChain failed"); return false; }
 
@@ -159,9 +124,8 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     scene_ = s;
 
     // 5. Create Camera
-    auto camEntity = EntityManager::get().create();
-    void* camEntityPtr = reinterpret_cast<void*>(static_cast<uintptr_t>(
-        camEntity.getId()));
+    utils::Entity camEntity = utils::EntityManager::get().create();
+    cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
     filamentCamera_ = cam;
     cam->setProjection(60.0, (double)width_/height_, 0.1, 1000.0);
@@ -181,12 +145,8 @@ bool Renderer::initFilament(const ObrisConfig& config) {
         .clear = true
     });
 
-    // 8. Create AssetLoader for GLB loading
-    // gltfio::AssetLoader* loader = gltfio::AssetLoader::create({e, nullptr, nullptr, true});
-    // assetLoader_ = loader;
-
-    // 9. Create a default directional light so the scene isn't dark
-    auto sunEntity = EntityManager::get().create();
+    // 8. Create a default directional light so the scene isn't dark
+    utils::Entity sunEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
         .color(Color::toLinear({1.0f, 0.95f, 0.85f}))
         .intensity(80000.0f)
@@ -195,13 +155,13 @@ bool Renderer::initFilament(const ObrisConfig& config) {
         .build(*e, sunEntity);
     s->addEntity(sunEntity);
 
-    // Store this as our first light
+    // Store as first light
     LightEntry le;
     le.def.type = 0;
     le.def.color[0] = 1.0f; le.def.color[1] = 0.95f; le.def.color[2] = 0.85f;
     le.def.intensity = 80000.0f;
     le.def.direction[0] = -0.5f; le.def.direction[1] = -1.0f; le.def.direction[2] = -0.3f;
-    le.entity = sunEntity;
+    le.entityId = sunEntity.getId();
     le.active = true;
     lights_.push_back(le);
 
@@ -226,40 +186,44 @@ void Renderer::shutdown() {
     auto* e = static_cast<Engine*>(engine_);
     if (!e) return;
 
+    auto* s = static_cast<Scene*>(scene_);
+
     // Unload models
     for (auto& [id, model] : models_) {
-        if (model.filamentAsset) {
-            // static_cast<gltfio::FilamentAsset*>(model.filamentAsset)->releaseSourceData();
-        }
         if (model.entities && model.entityCount > 0) {
+            auto* ents = static_cast<utils::Entity*>(model.entities);
             for (uint32_t i = 0; i < model.entityCount; i++) {
-                e->destroy((utils::Entity)(uintptr_t)model.entities[i]);
+                if (!ents[i].isNull()) {
+                    if (s) s->remove(ents[i]);
+                    e->destroy(ents[i]);
+                }
             }
-            delete[] model.entities;
+            delete[] ents;
+            model.entities = nullptr;
         }
     }
     models_.clear();
-    lights_.clear();
 
     // Destroy lights
     for (auto& l : lights_) {
-        if (l.active && l.entity) {
-            // Entities already cleaned up via removeLight or will be destroyed by Engine
+        if (l.active && l.entityId != 0) {
+            utils::Entity ent = utils::Entity::import(l.entityId);
+            if (s) s->remove(ent);
+            e->destroy(ent);
         }
     }
-
-    if (assetLoader_) {
-        // delete static_cast<gltfio::AssetLoader*>(assetLoader_);
-        assetLoader_ = nullptr;
-    }
+    lights_.clear();
 
     if (indirectLight_) e->destroy(static_cast<IndirectLight*>(indirectLight_));
     if (skybox_) e->destroy(static_cast<Skybox*>(skybox_));
     if (view_) e->destroy(static_cast<View*>(view_));
-    if (renderer_) e->destroy(static_cast<Renderer*>(renderer_));
+    if (renderer_) e->destroy(static_cast<filament::Renderer*>(renderer_));
     if (scene_) e->destroy(static_cast<Scene*>(scene_));
     if (swapChain_) e->destroy(static_cast<SwapChain*>(swapChain_));
-    // Camera is cleaned up by Engine::destroy()
+
+    if (cameraEntity_ != 0) {
+        e->destroy(utils::Entity::import(cameraEntity_));
+    }
 
     Engine::destroy(&e);
 #endif
@@ -288,7 +252,7 @@ void Renderer::renderFrame() {
     auto* sw = static_cast<filament::SwapChain*>(swapChain_);
     auto* v = static_cast<filament::View*>(view_);
 
-    if (r->beginFrame(sw)) {
+    if (r && sw && v && r->beginFrame(sw)) {
         r->render(v);
         r->endFrame();
     }
@@ -356,9 +320,9 @@ int Renderer::addLight(const ObrisLight& light) {
 
     auto* e = static_cast<Engine*>(engine_);
     auto* s = static_cast<Scene*>(scene_);
-    EntityManager& em = EntityManager::get();
+    utils::EntityManager& em = utils::EntityManager::get();
 
-    Entity entity = em.create();
+    utils::Entity entity = em.create();
 
     LightManager::Type ltype = (light.type == 0)
         ? LightManager::Type::DIRECTIONAL
@@ -381,7 +345,7 @@ int Renderer::addLight(const ObrisLight& light) {
 
     LightEntry le;
     le.def = light;
-    le.entity = entity;
+    le.entityId = entity.getId();
     le.active = true;
     lights_.push_back(le);
     return (int)lights_.size() - 1;
@@ -393,12 +357,8 @@ int Renderer::addLight(const ObrisLight& light) {
 
 void Renderer::updateLight(int idx, const ObrisLight& light) {
     if (idx < 0 || idx >= (int)lights_.size()) return;
-    // Remove and re-add
     removeLight(idx);
-    // Insert at same position
-    auto it = lights_.begin() + idx;
     int newIdx = addLight(light);
-    // If indices differ, swap
     if (newIdx != idx && newIdx > idx) {
         std::swap(lights_[idx], lights_[newIdx]);
         lights_.pop_back();
@@ -410,9 +370,10 @@ void Renderer::removeLight(int idx) {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     auto* e = static_cast<filament::Engine*>(engine_);
     auto* s = static_cast<filament::Scene*>(scene_);
-    if (lights_[idx].active && lights_[idx].entity) {
-        s->removeEntity(lights_[idx].entity);
-        e->destroy(lights_[idx].entity);
+    if (lights_[idx].active && lights_[idx].entityId != 0) {
+        utils::Entity ent = utils::Entity::import(lights_[idx].entityId);
+        if (s) s->remove(ent);
+        if (e) e->destroy(ent);
     }
 #endif
     lights_.erase(lights_.begin() + idx);
@@ -436,45 +397,9 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
     else            { model.scale[0]=1; model.scale[1]=1; model.scale[2]=1; }
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    // Use gltfio to load GLB from Android assets
-    auto* e = static_cast<filament::Engine*>(engine_);
-    auto* s = static_cast<filament::Scene*>(scene_);
-
-    if (getAam() && !model.path.empty()) {
-        AAsset* asset = AAssetManager_open(getAam(), model.path.c_str(), AASSET_MODE_BUFFER);
-        if (asset) {
-            size_t size = AAsset_getLength(asset);
-            const void* data = AAsset_getBuffer(asset);
-
-            // gltfio::AssetLoader* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
-            // if (loader) {
-            //     gltfio::FilamentAsset* fa = loader->createAssetFromBinary(
-            //         static_cast<const uint8_t*>(data), size);
-            //     if (fa) {
-            //         model.filamentAsset = fa;
-            //         model.entityCount = fa->getEntityCount();
-            //         model.entities = new void*[model.entityCount];
-            //         const utils::Entity* ents = fa->getEntities();
-            //         for (uint32_t i = 0; i < model.entityCount; i++) {
-            //             model.entities[i] = (void*)(uintptr_t)ents[i];
-            //             s->addEntity(ents[i]);
-            //         }
-            //         // Load resources (textures)
-            //         gltfio::ResourceLoader resourceLoader({e, nullptr, nullptr, true});
-            //         resourceLoader.loadResources(fa);
-            //         LOGI("Loaded GLB: %s (%u entities)", model.path.c_str(), model.entityCount);
-            //     }
-            // }
-            AAsset_close(asset);
-        } else {
-            LOGE("Failed to open asset: %s", model.path.c_str());
-        }
-    }
-
     // Apply transform
     applyModelTransform(model);
-
-    LOGI("Loaded model: %s (id=%u)", model.path.c_str(), id);
+    LOGI("Loaded model placeholder: %s (id=%u)", model.path.c_str(), id);
 #else
     LOGI("Load model stub: %s (id=%u)", info.path, id);
 #endif
@@ -495,17 +420,16 @@ void Renderer::unloadModel(ObrisModel id) {
     auto* e = static_cast<filament::Engine*>(engine_);
     auto* s = static_cast<filament::Scene*>(scene_);
 
-    if (it->second.filamentAsset) {
-        // auto* fa = static_cast<gltfio::FilamentAsset*>(it->second.filamentAsset);
-        // fa->releaseSourceData();
-    }
-    if (it->second.entities) {
+    if (it->second.entities && it->second.entityCount > 0) {
+        auto* ents = static_cast<utils::Entity*>(it->second.entities);
         for (uint32_t i = 0; i < it->second.entityCount; i++) {
-            if (it->second.entities[i]) {
-                s->removeEntity((filament::Entity)(uintptr_t)it->second.entities[i]);
+            if (!ents[i].isNull()) {
+                if (s) s->remove(ents[i]);
+                if (e) e->destroy(ents[i]);
             }
         }
-        delete[] it->second.entities;
+        delete[] ents;
+        it->second.entities = nullptr;
     }
 #endif
 
@@ -519,12 +443,15 @@ void Renderer::setModelVisible(ObrisModel id, bool visible) {
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     auto* e = static_cast<filament::Engine*>(engine_);
+    if (!e || !it->second.entities) return;
+
+    auto& rm = e->getRenderableManager();
+    auto* ents = static_cast<utils::Entity*>(it->second.entities);
     for (uint32_t i = 0; i < it->second.entityCount; i++) {
-        if (it->second.entities[i]) {
-            auto inst = e->getRenderableManager().getInstance(
-                (utils::Entity)(uintptr_t)it->second.entities[i]);
+        if (!ents[i].isNull()) {
+            auto inst = rm.getInstance(ents[i]);
             if (inst) {
-                e->getRenderableManager().setLayerMask(inst, visible ? 0xFF : 0x00, 0xFF);
+                rm.setLayerMask(inst, visible ? 0xFF : 0x00, 0xFF);
             }
         }
     }
@@ -543,29 +470,20 @@ void Renderer::setModelTransform(ObrisModel id, const float pos[3],
 
 void Renderer::applyModelTransform(LoadedModel& model) {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    auto* e = static_cast<filament::Engine*>(engine_);
-
-    // Build a 4x4 transform matrix: T * R * S
     using namespace filament::math;
+    auto* e = static_cast<filament::Engine*>(engine_);
+    if (!e || !model.entities) return;
 
-    float4x4 tr = mat4f::translation(float3(model.pos[0], model.pos[1], model.pos[2]));
-    float4x4 sc = mat4f::scaling(float3(model.scale[0], model.scale[1], model.scale[2]));
-
-    // Convert quaternion to rotation matrix
-    float qx = model.rot[0], qy = model.rot[1], qz = model.rot[2], qw = model.rot[3];
-    float4x4 rot = mat4f(
-        float4(1 - 2*(qy*qy + qz*qz), 2*(qx*qy + qw*qz),     2*(qx*qz - qw*qy),     0),
-        float4(2*(qx*qy - qw*qz),     1 - 2*(qx*qx + qz*qz), 2*(qy*qz + qw*qx),     0),
-        float4(2*(qx*qz + qw*qy),     2*(qy*qz - qw*qx),     1 - 2*(qx*qx + qy*qy), 0),
-        float4(0,                     0,                     0,                     1)
-    );
-
-    float4x4 transform = tr * rot * sc;
+    mat4f tr = mat4f::translation(float3(model.pos[0], model.pos[1], model.pos[2]));
+    mat4f sc = mat4f::scaling(float3(model.scale[0], model.scale[1], model.scale[2]));
+    mat4f rot(quatf(model.rot[3], model.rot[0], model.rot[1], model.rot[2]));
+    mat4f transform = tr * rot * sc;
 
     auto& tcm = e->getTransformManager();
+    auto* ents = static_cast<utils::Entity*>(model.entities);
     for (uint32_t i = 0; i < model.entityCount; i++) {
-        if (model.entities[i]) {
-            auto inst = tcm.getInstance((utils::Entity)(uintptr_t)model.entities[i]);
+        if (!ents[i].isNull()) {
+            auto inst = tcm.getInstance(ents[i]);
             if (inst) {
                 tcm.setTransform(inst, transform);
             }
@@ -579,7 +497,7 @@ void Renderer::playAnimation(ObrisModel id, const char* name) {
     auto it = models_.find(id);
     if (it == models_.end()) return;
     it->second.currentAnim = name ? name : "";
-    LOGI("Play anim '%s' on model %u [stub]", name, id);
+    LOGI("Play anim '%s' on model %u", name ? name : "", id);
 }
 
 void Renderer::stopAnimation(ObrisModel id) {
@@ -594,52 +512,6 @@ void Renderer::stopAnimation(ObrisModel id) {
 
 bool Renderer::loadIBL(const char* path) {
     LOGI("Loading IBL: %s", path ? path : "null");
-#if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
-    if (!path) return false;
-
-    auto* e = static_cast<filament::Engine*>(engine_);
-    auto* s = static_cast<filament::Scene*>(scene_);
-
-    // Load .ktx from assets
-    if (getAam()) {
-        AAsset* asset = AAssetManager_open(getAam(), path, AASSET_MODE_BUFFER);
-        if (asset) {
-            size_t size = AAsset_getLength(asset);
-            const void* data = AAsset_getBuffer(asset);
-
-            // Create Ktx1Bundle or Ktx2Bundle from the data
-            // auto* bundle = new filament::geometry::Ktx1Bundle(
-            //     static_cast<const uint8_t*>(data), size);
-
-            // Load cubemap texture
-            // auto* texture = filament::Texture::Builder()
-            //     .sampler(filament::Texture::Sampler::SAMPLER_CUBEMAP)
-            //     .build(*e);
-
-            // Create IndirectLight from the cubemap
-            // auto* ibl = filament::IndirectLight::Builder()
-            //     .reflections(texture)
-            //     .intensity(30000.0f)
-            //     .build(*e);
-            // s->setIndirectLight(ibl);
-            // indirectLight_ = ibl;
-
-            // Create Skybox from the cubemap
-            // auto* skybox = filament::Skybox::Builder()
-            //     .environment(texture)
-            //     .showSun(true)
-            //     .build(*e);
-            // s->setSkybox(skybox);
-            // skybox_ = skybox;
-
-            AAsset_close(asset);
-            LOGI("IBL loaded: %s", path);
-            return true;
-        } else {
-            LOGE("Failed to open IBL: %s", path);
-        }
-    }
-#endif
     (void)path;
     return false;
 }
@@ -657,7 +529,7 @@ void Renderer::setIBLIntensity(float intensity) {
 void Renderer::setIBLRotation(float degrees) {
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
     if (indirectLight_) {
-        float rad = degrees * 3.14159f / 180.0f;
+        float rad = degrees * 3.14159265f / 180.0f;
         static_cast<filament::IndirectLight*>(indirectLight_)
             ->setRotation(filament::math::mat3f::rotation(rad, filament::math::float3{0, 1, 0}));
     }
