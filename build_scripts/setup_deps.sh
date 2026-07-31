@@ -30,13 +30,23 @@ setup_filament() {
     local out_dir="$THIRD_DIR/filament"
     local any=false
 
-    # Check .so files
+    # Check .so files & critical headers
     local all_done=true
     for abi in arm64-v8a armeabi-v7a x86_64; do
         [ ! -f "$out_dir/lib/$abi/libfilament-jni.so" ] && all_done=false
     done
     [ ! -f "$out_dir/include/filament/Engine.h" ] && all_done=false
-    if [ "$all_done" = true ]; then ok "Filament already set up"; return; fi
+    [ ! -f "$out_dir/include/backend/BufferDescriptor.h" ] && all_done=false
+    [ ! -f "$out_dir/include/utils/bitset.h" ] && all_done=false
+    [ ! -f "$out_dir/include/filament/MaterialEnums.h" ] && all_done=false
+
+    local h_count=0
+    if [ -d "$out_dir/include" ]; then
+        h_count=$(find "$out_dir/include" \( -name '*.h' -o -name '*.hpp' \) | wc -l)
+    fi
+    [ "$h_count" -lt 200 ] && all_done=false
+
+    if [ "$all_done" = true ]; then ok "Filament already fully set up ($h_count headers)"; return; fi
 
     mkdir -p "$out_dir/lib" "$out_dir/include"
 
@@ -57,64 +67,93 @@ setup_filament() {
         fi
     done
 
-    # ── Download all C++ headers ─────────────────────────────
-    if [ ! -f "$out_dir/include/filament/Engine.h" ]; then
-        info "Downloading Filament headers..."
+    # ── Download complete C++ header tree ───────────────────
+    info "Fetching complete Filament C++ header tree..."
+    python3 -c "
+import urllib.request, json, os, sys
+
+version = '$version'
+out_dir = '$out_dir/include'
+url = f'https://api.github.com/repos/google/filament/git/trees/v{version}?recursive=1'
+headers = {'User-Agent': 'ObrisBuild/1.0'}
+if 'GITHUB_TOKEN' in os.environ:
+    headers['Authorization'] = f'token {os.environ[\"GITHUB_TOKEN\"]}'
+
+req = urllib.request.Request(url, headers=headers)
+try:
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+        tree = data.get('tree', [])
+except Exception as e:
+    print(f'API error fetching tree: {e}', file=sys.stderr)
+    sys.exit(1)
+
+target_roots = ['filament/', 'libs/']
+header_mappings = []
+
+for item in tree:
+    if item['type'] == 'blob' and (item['path'].endswith('.h') or item['path'].endswith('.hpp')):
+        path = item['path']
+        if any(path.startswith(r) for r in target_roots) and '/include/' in path:
+            prefix, rel = path.split('/include/', 1)
+            if 'third_party' not in prefix:
+                header_mappings.append((path, rel))
+
+raw_base = f'https://raw.githubusercontent.com/google/filament/v{version}/'
+downloaded = 0
+failed = 0
+
+for gh_path, rel_path in header_mappings:
+    dest = os.path.join(out_dir, rel_path)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    file_url = raw_base + gh_path
+    try:
+        urllib.request.urlretrieve(file_url, dest)
+        downloaded += 1
+    except Exception as e:
+        print(f'Warning: failed to fetch {gh_path}: {e}', file=sys.stderr)
+        failed += 1
+
+print(f'[OK] Downloaded {downloaded} Filament headers ({failed} failed)')
+" 2>/dev/null || {
+        warn "Python script failed, falling back to manual curl header fetch..."
         local gh="https://raw.githubusercontent.com/google/filament/v$version"
-        local count=0
 
-        # filament/include/filament/
-        local fil_dir="$out_dir/include/filament"
-        mkdir -p "$fil_dir"
-        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight LightManager Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure ToneMapper; do
-            curl -fsSL -o "$fil_dir/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null && count=$((count+1))
-        done
-        # libs/filabridge/include/filament/ (MaterialEnums lives here, not in main filament dir)
-        for h in MaterialEnums; do
-            curl -fsSL -o "$fil_dir/$h.h" "$gh/libs/filabridge/include/filament/$h.h" 2>/dev/null && count=$((count+1))
+        # Core filament
+        mkdir -p "$out_dir/include/filament"
+        for h in Engine Renderer Scene View Camera SwapChain Skybox IndirectLight LightManager Texture Color FilamentAPI TransformManager RenderableManager Box Options Viewport Frustum ColorGrading Exposure ToneMapper MaterialEnums; do
+            curl -fsSL -o "$out_dir/include/filament/$h.h" "$gh/filament/include/filament/$h.h" 2>/dev/null || true
+            curl -fsSL -o "$out_dir/include/filament/$h.h" "$gh/libs/filabridge/include/filament/$h.h" 2>/dev/null || true
         done
 
-        # libs/utils/include/utils/ + subdirs
-        local utils_dir="$out_dir/include/utils"
-        mkdir -p "$utils_dir/linux" "$utils_dir/generic" "$utils_dir/android" "$utils_dir/darwin" "$utils_dir/win32"
+        # Backend
+        mkdir -p "$out_dir/include/backend"
+        for h in AcquiredImage BufferDescriptor CallbackHandler DriverApiForward DriverEnums Handle PipelineState PixelBufferDescriptor Platform PresentCallable Program SamplerDescriptor TargetBufferInfo; do
+            curl -fsSL -o "$out_dir/include/backend/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null || true
+        done
+
+        # Utils
+        mkdir -p "$out_dir/include/utils" "$out_dir/include/utils/linux" "$out_dir/include/utils/generic" "$out_dir/include/utils/android"
         for h in Allocator BitmaskEnum CString CallStack Condition CountDownLatch CyclicBarrier Entity EntityInstance EntityManager FixedCapacityVector FixedCircularBuffer Hash Invocable JobSystem Log Mutex NameComponentManager Panic Path PrivateImplementation Profiler QuadTree Range RangeMap SingleInstanceComponentManager Slice Stopwatch StructureOfArrays Systrace ThermalManager ThreadUtils WorkStealingDequeue Zip2Iterator algorithm api_level architecture ashmem bitset compiler compressed_pair debug memalign ostream sstream string trap unwindows vector; do
-            curl -fsSL -o "$utils_dir/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null && count=$((count+1))
+            curl -fsSL -o "$out_dir/include/utils/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null || true
         done
-        # Platform-specific
         for h in Condition Mutex; do
-            curl -fsSL -o "$utils_dir/linux/$h.h" "$gh/libs/utils/include/utils/linux/$h.h" 2>/dev/null && count=$((count+1))
-            curl -fsSL -o "$utils_dir/generic/$h.h" "$gh/libs/utils/include/utils/generic/$h.h" 2>/dev/null && count=$((count+1))
+            curl -fsSL -o "$out_dir/include/utils/linux/$h.h" "$gh/libs/utils/include/utils/linux/$h.h" 2>/dev/null || true
+            curl -fsSL -o "$out_dir/include/utils/generic/$h.h" "$gh/libs/utils/include/utils/generic/$h.h" 2>/dev/null || true
         done
-        for h in PerformanceHintManager Systrace ThermalManager; do
-            curl -fsSL -o "$utils_dir/android/$h.h" "$gh/libs/utils/include/utils/android/$h.h" 2>/dev/null && count=$((count+1))
-        done
-        curl -fsSL -o "$utils_dir/darwin/Systrace.h" "$gh/libs/utils/include/utils/darwin/Systrace.h" 2>/dev/null && count=$((count+1))
-        curl -fsSL -o "$utils_dir/win32/stdtypes.h" "$gh/libs/utils/include/utils/win32/stdtypes.h" 2>/dev/null && count=$((count+1))
 
-        # libs/math/include/math/
-        local math_dir="$out_dir/include/math"
-        mkdir -p "$math_dir"
+        # Math
+        mkdir -p "$out_dir/include/math"
         for h in mathfwd vec2 vec3 vec4 mat4 mat3 quat geometry half TMatHelpers TVecHelpers TQuatHelpers TMat TVec TQuat norm type_traits compiler common scalar fast int2 int3 int4 uint2 uint3 uint4; do
-            curl -fsSL -o "$math_dir/$h.h" "$gh/libs/math/include/math/$h.h" 2>/dev/null && count=$((count+1))
+            curl -fsSL -o "$out_dir/include/math/$h.h" "$gh/libs/math/include/math/$h.h" 2>/dev/null || true
         done
 
-        # filament/backend/include/backend/
-        local backend_dir="$out_dir/include/backend"
-        mkdir -p "$backend_dir"
-        for h in DriverEnums Platform PresentCallable CallbackHandler PixelBufferDescriptor; do
-            curl -fsSL -o "$backend_dir/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null && count=$((count+1))
-        done
-
-        # libs/gltfio/include/gltfio/
-        local gltfio_dir="$out_dir/include/gltfio"
-        mkdir -p "$gltfio_dir"
+        # gltfio
+        mkdir -p "$out_dir/include/gltfio"
         for h in AssetLoader FilamentAsset ResourceLoader Animator math; do
-            curl -fsSL -o "$gltfio_dir/$h.h" "$gh/libs/gltfio/include/gltfio/$h.h" 2>/dev/null && count=$((count+1))
+            curl -fsSL -o "$out_dir/include/gltfio/$h.h" "$gh/libs/gltfio/include/gltfio/$h.h" 2>/dev/null || true
         done
-
-        ok "Filament headers — $count files"
-        any=true
-    fi
+    }
 
     # ── Verify ─────────────────────────────────────────────
     for ABI in arm64-v8a armeabi-v7a x86_64; do
@@ -122,7 +161,8 @@ setup_filament() {
         [ -f "$f" ] && ok "Filament $ABI — $(wc -c < "$f") bytes"
     done
     [ -f "$out_dir/include/filament/Engine.h" ] && ok "filament/Engine.h ready"
-    [ "$any" = false ] && warn "Filament — NOT AVAILABLE (stub)"
+    [ -f "$out_dir/include/backend/BufferDescriptor.h" ] && ok "backend/BufferDescriptor.h ready"
+    [ -f "$out_dir/include/utils/bitset.h" ] && ok "utils/bitset.h ready"
 }
 
 setup_sodium() {
