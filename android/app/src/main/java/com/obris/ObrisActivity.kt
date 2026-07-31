@@ -2,6 +2,7 @@ package com.obris
 
 import android.content.res.AssetManager
 import android.os.Bundle
+import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -14,12 +15,12 @@ class ObrisActivity : AppCompatActivity() {
 
     private lateinit var surfaceView: SurfaceView
     private var nativePtr: Long = 0
+    private var isRendering = false
 
-    // ── Load library (class-level, NOT in companion object) ────
+    // ── Load library ──────────────────────────────────────────
     init { System.loadLibrary("obris_shared") }
 
-    // ── Native methods (class-level, NOT companion) ────────────
-    // This avoids JNI name mangling with _00024Companion
+    // ── Native methods ────────────────────────────────────────
 
     private external fun nativeCreate(
         surface: android.view.Surface,
@@ -78,6 +79,27 @@ class ObrisActivity : AppCompatActivity() {
     private external fun nativeEncrypt(key: ByteArray, data: ByteArray): ByteArray?
     private external fun nativeDecrypt(key: ByteArray, data: ByteArray): ByteArray?
 
+    // ── Frame Loop ────────────────────────────────────────────
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (isRendering && nativePtr != 0L) {
+                nativeRenderFrame()
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+    }
+
+    private fun startRendering() {
+        if (!isRendering) {
+            isRendering = true
+            Choreographer.getInstance().postFrameCallback(frameCallback)
+        }
+    }
+
+    private fun stopRendering() {
+        isRendering = false
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,13 +111,16 @@ class ObrisActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (nativePtr != 0L) startRendering()
     }
 
     override fun onPause() {
+        stopRendering()
         super.onPause()
     }
 
     override fun onDestroy() {
+        stopRendering()
         if (nativePtr != 0L) {
             nativeDestroy()
             nativePtr = 0L
@@ -117,6 +142,7 @@ class ObrisActivity : AppCompatActivity() {
             )
 
             setupDefaultScene()
+            startRendering()
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
@@ -124,7 +150,7 @@ class ObrisActivity : AppCompatActivity() {
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
-            // Engine handles this
+            stopRendering()
         }
     }
 

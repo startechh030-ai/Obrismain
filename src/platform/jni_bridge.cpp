@@ -49,7 +49,7 @@ Java_com_obris_ObrisActivity_nativeCreate(
     config.width = width;
     config.height = height;
     config.nativeWindow = window;
-    config.useVulkan = 1;  // Prefer Vulkan
+    config.useVulkan = 0;  // Use OpenGL ES 3 (EGL) for universal Android compatibility
     config.iblPath = iblPath ? env->GetStringUTFChars(iblPath, nullptr) : nullptr;
 
     // Create renderer

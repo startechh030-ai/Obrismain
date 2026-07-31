@@ -139,11 +139,17 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     v->setViewport({0, 0, (uint32_t)width_, (uint32_t)height_});
     v->setPostProcessingEnabled(false);
 
-    // 7. Set clear color (dark blue-gray)
+    // 7. Set clear color & solid Skybox background
     r->setClearOptions({
-        .clearColor = { clearR_, clearG_, clearB_, clearA_ },
+        .clearColor = { 0.12f, 0.18f, 0.32f, 1.0f },
         .clear = true
     });
+
+    auto* skybox = Skybox::Builder()
+        .color({ 0.12f, 0.18f, 0.32f, 1.0f })
+        .build(*e);
+    s->setSkybox(skybox);
+    skybox_ = skybox;
 
     // 8. Create a default directional light so the scene isn't dark
     utils::Entity sunEntity = utils::EntityManager::get().create();

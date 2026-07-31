@@ -13,6 +13,14 @@
     ".h": {
       "enabled": false,
       "run": "clangd"
+    },
+    ".kt": {
+      "enabled": true,
+      "run": "kotlin-language-server"
+    },
+    ".sh": {
+      "enabled": true,
+      "run": "bash-language-server start"
     }
   }
 }
