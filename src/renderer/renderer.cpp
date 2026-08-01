@@ -319,7 +319,7 @@ void Renderer::createProceduralObjects() {
         .build(*e);
 
     vbGrid->setBufferAt(*e, 0, backend::BufferDescriptor(gridVerts.data(), gridVerts.size() * sizeof(GridVertex)));
-    ibGrid->setBufferAt(*e, backend::BufferDescriptor(gridIndices.data(), gridIndices.size() * sizeof(uint16_t)));
+    ibGrid->setBuffer(*e, backend::BufferDescriptor(gridIndices.data(), gridIndices.size() * sizeof(uint16_t)));
 
     gridVb_ = vbGrid;
     gridIb_ = ibGrid;
@@ -406,7 +406,7 @@ void Renderer::createProceduralObjects() {
         .build(*e);
 
     vbCube->setBufferAt(*e, 0, backend::BufferDescriptor(cubeVerts.data(), cubeVerts.size() * sizeof(CubeVertex)));
-    ibCube->setBufferAt(*e, backend::BufferDescriptor(cubeIndices.data(), cubeIndices.size() * sizeof(uint16_t)));
+    ibCube->setBuffer(*e, backend::BufferDescriptor(cubeIndices.data(), cubeIndices.size() * sizeof(uint16_t)));
 
     cubeVb_ = vbCube;
     cubeIb_ = ibCube;
