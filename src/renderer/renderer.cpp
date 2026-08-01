@@ -144,13 +144,13 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     auto* s = e->createScene();
     scene_ = s;
 
-    // 5. Create Camera
+    // 5. Create Camera (Angled viewport lookAt center gizmo)
     utils::Entity camEntity = utils::EntityManager::get().create();
     cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
     filamentCamera_ = cam;
     cam->setProjection(60.0, (double)width_/height_, 0.1, 1000.0);
-    cam->lookAt({0, 2.5f, 5.0f}, {0, 0.75f, 0.0f}, {0, 1.0f, 0.0f});
+    cam->lookAt({0.0f, 2.5f, 5.0f}, {0.0f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f});
 
     // 6. Create View
     auto* v = e->createView();
@@ -160,34 +160,34 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     v->setViewport({0, 0, (uint32_t)width_, (uint32_t)height_});
     v->setPostProcessingEnabled(false);
 
-    // 7. Set clear color & Skybox background
+    // 7. Studio Gray Viewport Background
     r->setClearOptions({
-        .clearColor = { 0.08f, 0.10f, 0.16f, 1.0f },
+        .clearColor = { 0.22f, 0.23f, 0.25f, 1.0f },
         .clear = true
     });
 
     auto* skybox = Skybox::Builder()
-        .color({ 0.08f, 0.10f, 0.16f, 1.0f })
+        .color({ 0.22f, 0.23f, 0.25f, 1.0f })
         .build(*e);
     s->setSkybox(skybox);
     skybox_ = skybox;
 
-    // 8. Create Directional Sun Light (Primary daylight)
+    // 8. Directional Sun Light (Daylight with shadows)
     utils::Entity sunEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
-        .color(Color::toLinear({1.0f, 0.96f, 0.88f}))
-        .intensity(120000.0f)
-        .direction({-0.5f, -1.0f, -0.4f})
+        .color(Color::toLinear({1.0f, 0.98f, 0.94f}))
+        .intensity(110000.0f)
+        .direction({-0.6f, -1.0f, -0.4f})
         .castShadows(true)
         .build(*e, sunEntity);
     s->addEntity(sunEntity);
 
-    // 9. Create Fill Light (Secondary sky fill)
+    // 9. Fill Sky Light (Soft secondary fill)
     utils::Entity fillEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
-        .color(Color::toLinear({0.4f, 0.6f, 1.0f}))
-        .intensity(40000.0f)
-        .direction({0.5f, 0.8f, 0.5f})
+        .color(Color::toLinear({0.5f, 0.65f, 0.85f}))
+        .intensity(35000.0f)
+        .direction({0.6f, 0.8f, 0.5f})
         .castShadows(false)
         .build(*e, fillEntity);
     s->addEntity(fillEntity);
@@ -199,10 +199,10 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     lights_.push_back(leSun);
     lights_.push_back(leFill);
 
-    // 10. Create procedural Grid Floor, Axis Gizmo & Center 3D Cube
+    // 10. Create 3D Grid Floor, Axis Gizmo & 3D Center Cube
     createProceduralObjects();
 
-    LOGI("Filament init complete with grid floor, gizmo & 3D cube");
+    LOGI("Filament init complete");
     return true;
 #else
     (void)config;
@@ -223,14 +223,17 @@ void Renderer::createProceduralObjects() {
     auto* s = static_cast<Scene*>(scene_);
     if (!e || !s) return;
 
-    // ── Build Materials via Filamat ───────────────────────────
+    // Use OPENGL or VULKAN TargetApi depending on backend
+    auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
+
+    // ── Build Unlit Material (for Grid & Gizmo lines) ─────────
     filamat::MaterialBuilder unlitBuilder;
     unlitBuilder.name("UnlitGridMat")
                 .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }")
                 .shading(filamat::MaterialBuilder::Shading::UNLIT)
                 .require(VertexAttribute::POSITION)
                 .require(VertexAttribute::COLOR)
-                .targetApi(filamat::MaterialBuilder::TargetApi::ALL);
+                .targetApi(targetApi);
 
     filamat::Package unlitPkg = unlitBuilder.build(e->getJobSystem());
     if (unlitPkg.isValid()) {
@@ -239,16 +242,20 @@ void Renderer::createProceduralObjects() {
             .build(*e);
         unlitMaterial_ = mat;
         unlitMaterialInstance_ = mat->createInstance();
+        LOGI("Unlit material built successfully (%zu bytes)", unlitPkg.getSize());
+    } else {
+        LOGE("Failed to build unlit material package!");
     }
 
+    // ── Build Lit Material (for Center 3D Cube) ───────────────
     filamat::MaterialBuilder litBuilder;
     litBuilder.name("LitCubeMat")
-              .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.30; material.metallic = 0.70; }")
+              .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }")
               .shading(filamat::MaterialBuilder::Shading::LIT)
               .require(VertexAttribute::POSITION)
               .require(VertexAttribute::COLOR)
               .require(VertexAttribute::TANGENTS)
-              .targetApi(filamat::MaterialBuilder::TargetApi::ALL);
+              .targetApi(targetApi);
 
     filamat::Package litPkg = litBuilder.build(e->getJobSystem());
     if (litPkg.isValid()) {
@@ -257,10 +264,13 @@ void Renderer::createProceduralObjects() {
             .build(*e);
         litMaterial_ = mat;
         litMaterialInstance_ = mat->createInstance();
+        LOGI("Lit material built successfully (%zu bytes)", litPkg.getSize());
+    } else {
+        LOGE("Failed to build lit material package!");
     }
 
     if (!unlitMaterialInstance_ || !litMaterialInstance_) {
-        LOGE("Failed to create filamat procedural materials");
+        LOGE("Procedural materials missing — skipping mesh build");
         return;
     }
 
@@ -268,13 +278,13 @@ void Renderer::createProceduralObjects() {
     std::vector<GridVertex> gridVerts;
     std::vector<uint16_t> gridIndices;
 
-    ubyte4 gridColorLine = packUnorm8(float4(0.28f, 0.38f, 0.55f, 0.8f));
-    ubyte4 axisXColor    = packUnorm8(float4(1.00f, 0.20f, 0.20f, 1.0f)); // Red X
-    ubyte4 axisYColor    = packUnorm8(float4(0.20f, 1.00f, 0.20f, 1.0f)); // Green Y
-    ubyte4 axisZColor    = packUnorm8(float4(0.20f, 0.50f, 1.00f, 1.0f)); // Blue Z
+    ubyte4 gridColorLine = packUnorm8(float4(0.40f, 0.42f, 0.46f, 0.6f));
+    ubyte4 axisXColor    = packUnorm8(float4(0.90f, 0.20f, 0.20f, 1.0f)); // Red X
+    ubyte4 axisYColor    = packUnorm8(float4(0.20f, 0.85f, 0.30f, 1.0f)); // Green Y
+    ubyte4 axisZColor    = packUnorm8(float4(0.20f, 0.50f, 0.90f, 1.0f)); // Blue Z
 
-    // Grid lines XZ plane from -10 to +10
-    float extent = 10.0f;
+    // Grid lines XZ plane from -15 to +15
+    float extent = 15.0f;
     float step = 1.0f;
 
     for (float i = -extent; i <= extent; i += step) {
@@ -289,16 +299,35 @@ void Renderer::createProceduralObjects() {
         gridVerts.push_back({ { extent, 0.0f, i}, colX });
     }
 
-    // Center Axis Gizmo at (0, 0.75, 0)
-    float3 center(0.0f, 0.75f, 0.0f);
-    gridVerts.push_back({ center, axisXColor });
-    gridVerts.push_back({ center + float3(1.2f, 0.0f, 0.0f), axisXColor });
+    // 3D Translation Gizmo Arrows anchored at cube center (0, 0.5, 0)
+    float3 center(0.0f, 0.5f, 0.0f);
 
+    // X Axis (Red) Arrow Handle
+    gridVerts.push_back({ center, axisXColor });
+    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+    // Arrow Tip X
+    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+    gridVerts.push_back({ center + float3(0.95f, 0.1f, 0.0f), axisXColor });
+    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+    gridVerts.push_back({ center + float3(0.95f, -0.1f, 0.0f), axisXColor });
+
+    // Y Axis (Green) Arrow Handle
     gridVerts.push_back({ center, axisYColor });
     gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+    // Arrow Tip Y
+    gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+    gridVerts.push_back({ center + float3(0.1f, 1.05f, 0.0f), axisYColor });
+    gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+    gridVerts.push_back({ center + float3(-0.1f, 1.05f, 0.0f), axisYColor });
 
+    // Z Axis (Blue) Arrow Handle
     gridVerts.push_back({ center, axisZColor });
-    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.2f), axisZColor });
+    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+    // Arrow Tip Z
+    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+    gridVerts.push_back({ center + float3(0.0f, 0.1f, 0.95f), axisZColor });
+    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+    gridVerts.push_back({ center + float3(0.0f, -0.1f, 0.95f), axisZColor });
 
     for (uint16_t i = 0; i < (uint16_t)gridVerts.size(); i++) {
         gridIndices.push_back(i);
@@ -328,7 +357,7 @@ void Renderer::createProceduralObjects() {
     gridEntity_ = gridEntity.getId();
 
     RenderableManager::Builder(1)
-        .boundingBox({ { -10.0f, -0.1f, -10.0f }, { 10.0f, 2.5f, 10.0f } })
+        .boundingBox({ { -15.0f, -0.1f, -15.0f }, { 15.0f, 2.5f, 15.0f } })
         .material(0, static_cast<MaterialInstance*>(unlitMaterialInstance_))
         .geometry(0, RenderableManager::PrimitiveType::LINES, vbGrid, ibGrid, 0, (uint32_t)gridIndices.size())
         .culling(false)
@@ -338,21 +367,16 @@ void Renderer::createProceduralObjects() {
 
     s->addEntity(gridEntity);
 
-    // ── Build 3D Lit Cube Mesh (TRIANGLES) ────────────────────
+    // ── Build 3D Lit White Cube Mesh (TRIANGLES) ──────────────
     std::vector<CubeVertex> cubeVerts;
     std::vector<uint16_t> cubeIndices;
 
-    // Cube dimensions: 1.0 unit centered at Y = 0.75 (from Y=0.25 to Y=1.25)
+    // Cube dimensions: 1.0 unit centered at Y = 0.5 (from Y=0.0 to Y=1.0)
     float minX = -0.5f, maxX = 0.5f;
-    float minY =  0.25f, maxY = 1.25f;
+    float minY =  0.00f, maxY = 1.00f;
     float minZ = -0.5f, maxZ = 0.5f;
 
-    ubyte4 colAmber   = packUnorm8(float4(1.00f, 0.70f, 0.20f, 1.0f)); // Front (Amber)
-    ubyte4 colOrange  = packUnorm8(float4(0.95f, 0.40f, 0.15f, 1.0f)); // Back (Orange)
-    ubyte4 colTeal    = packUnorm8(float4(0.15f, 0.80f, 0.85f, 1.0f)); // Top (Teal)
-    ubyte4 colBlue    = packUnorm8(float4(0.20f, 0.30f, 0.55f, 1.0f)); // Bottom (Slate)
-    ubyte4 colPurple  = packUnorm8(float4(0.75f, 0.25f, 0.85f, 1.0f)); // Right (Purple)
-    ubyte4 colGreen   = packUnorm8(float4(0.20f, 0.85f, 0.45f, 1.0f)); // Left (Green)
+    ubyte4 colWhite = packUnorm8(float4(0.92f, 0.92f, 0.92f, 1.0f));
 
     short4 qFront  = packSnorm16(float4(0.7071f, 0.0f, 0.0f, 0.7071f));
     short4 qBack   = packSnorm16(float4(0.0f, 0.7071f, 0.7071f, 0.0f));
@@ -378,17 +402,17 @@ void Renderer::createProceduralObjects() {
     };
 
     // Front (+Z)
-    addFace({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, colAmber, qFront);
+    addFace({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, colWhite, qFront);
     // Back (-Z)
-    addFace({maxX, minY, minZ}, {minX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ}, colOrange, qBack);
+    addFace({maxX, minY, minZ}, {minX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ}, colWhite, qBack);
     // Top (+Y)
-    addFace({minX, maxY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, colTeal, qTop);
+    addFace({minX, maxY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, colWhite, qTop);
     // Bottom (-Y)
-    addFace({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, colBlue, qBottom);
+    addFace({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, colWhite, qBottom);
     // Right (+X)
-    addFace({maxX, minY, maxZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, colPurple, qRight);
+    addFace({maxX, minY, maxZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, colWhite, qRight);
     // Left (-X)
-    addFace({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, colGreen, qLeft);
+    addFace({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, colWhite, qLeft);
 
     auto* vbCube = VertexBuffer::Builder()
         .vertexCount((uint32_t)cubeVerts.size())
@@ -424,6 +448,7 @@ void Renderer::createProceduralObjects() {
         .build(*e, cubeEntity);
 
     s->addEntity(cubeEntity);
+    LOGI("Grid floor, 3D Gizmo arrows & 3D Lit White Cube added to scene!");
 #endif
 }
 
