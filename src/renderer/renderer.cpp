@@ -49,13 +49,16 @@ static AAssetManager* getAam() {
     return static_cast<AAssetManager*>(obris::getAssetManager());
 }
 
-// ── JNI wrappers exported from libfilament-jni.so ────────────
+// ── JNI wrappers exported from libfilament-jni.so & libfilamat-jni.so ────
 extern "C" {
     jlong Java_com_google_android_filament_Engine_nCreateBuilder(JNIEnv*, jclass);
     void  Java_com_google_android_filament_Engine_nSetBuilderBackend(JNIEnv*, jclass, jlong builder, jint backend);
     jlong Java_com_google_android_filament_Engine_nBuilderBuild(JNIEnv*, jclass, jlong builder);
     void  Java_com_google_android_filament_Engine_nDestroyBuilder(JNIEnv*, jclass, jlong builder);
     void  Java_com_google_android_filament_Engine_nDestroyEngine(JNIEnv*, jclass, jlong engine);
+
+    // filamat JNI initializer
+    void  Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(JNIEnv*, jclass);
 }
 
 namespace obris {
@@ -144,7 +147,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     auto* s = e->createScene();
     scene_ = s;
 
-    // 5. Create Camera (Angled viewport lookAt center gizmo)
+    // 5. Create Camera (Angled viewport looking at center cube and grid)
     utils::Entity camEntity = utils::EntityManager::get().create();
     cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
@@ -223,7 +226,9 @@ void Renderer::createProceduralObjects() {
     auto* s = static_cast<Scene*>(scene_);
     if (!e || !s) return;
 
-    // Use OPENGL or VULKAN TargetApi depending on backend
+    // IMPORTANT: Initialize filamat glslang compiler tables!
+    Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(nullptr, nullptr);
+
     auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
 
     // ── Build Unlit Material (for Grid & Gizmo lines) ─────────
