@@ -2,6 +2,7 @@ package com.obris
 
 import android.content.res.AssetManager
 import android.os.Bundle
+import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -17,8 +18,13 @@ class ObrisActivity : AppCompatActivity() {
     private var nativePtr: Long = 0
     private var isRendering = false
 
-    // ── Load library ──────────────────────────────────────────
-    init { System.loadLibrary("obris_shared") }
+    // ── Load library with safe fallback order ─────────────────
+    init {
+        try { System.loadLibrary("filament-jni") } catch (t: Throwable) { Log.w("Obris", "filament-jni load: ${t.message}") }
+        try { System.loadLibrary("filamat-jni") } catch (t: Throwable) { Log.w("Obris", "filamat-jni load: ${t.message}") }
+        try { System.loadLibrary("gltfio-jni") } catch (t: Throwable) { Log.w("Obris", "gltfio-jni load: ${t.message}") }
+        try { System.loadLibrary("obris_shared") } catch (t: Throwable) { Log.e("Obris", "obris_shared load: ${t.message}") }
+    }
 
     // ── Native methods ────────────────────────────────────────
 
@@ -83,7 +89,11 @@ class ObrisActivity : AppCompatActivity() {
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (isRendering && nativePtr != 0L) {
-                nativeRenderFrame()
+                try {
+                    nativeRenderFrame()
+                } catch (t: Throwable) {
+                    Log.e("Obris", "Error in render frame: ${t.message}")
+                }
                 Choreographer.getInstance().postFrameCallback(this)
             }
         }
@@ -122,7 +132,11 @@ class ObrisActivity : AppCompatActivity() {
     override fun onDestroy() {
         stopRendering()
         if (nativePtr != 0L) {
-            nativeDestroy()
+            try {
+                nativeDestroy()
+            } catch (t: Throwable) {
+                Log.e("Obris", "Error in destroy: ${t.message}")
+            }
             nativePtr = 0L
         }
         super.onDestroy()
@@ -131,22 +145,30 @@ class ObrisActivity : AppCompatActivity() {
     // ── Surface Callback ──────────────────────────────────────
     private val surfaceCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
-            val w = holder.surfaceFrame.width().coerceAtLeast(720)
-            val h = holder.surfaceFrame.height().coerceAtLeast(1280)
+            try {
+                val w = holder.surfaceFrame.width().coerceAtLeast(720)
+                val h = holder.surfaceFrame.height().coerceAtLeast(1280)
 
-            nativePtr = nativeCreate(
-                holder.surface,
-                this@ObrisActivity.assets,
-                w, h,
-                null
-            )
+                nativePtr = nativeCreate(
+                    holder.surface,
+                    this@ObrisActivity.assets,
+                    w, h,
+                    null
+                )
 
-            setupDefaultScene()
-            startRendering()
+                if (nativePtr != 0L) {
+                    setupDefaultScene()
+                    startRendering()
+                }
+            } catch (t: Throwable) {
+                Log.e("Obris", "Surface creation error: ${t.message}", t)
+            }
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
-            if (nativePtr != 0L) nativeResize(w, h)
+            if (nativePtr != 0L) {
+                try { nativeResize(w, h) } catch (t: Throwable) {}
+            }
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -156,12 +178,14 @@ class ObrisActivity : AppCompatActivity() {
 
     // ── Default Scene Setup ────────────────────────────────────
     private fun setupDefaultScene() {
-        nativeSetCamera(0f, 2.5f, 5f, 0f, 1f, 0f, 60f)
-
-        nativeAddLight(0, 1f, 0.95f, 0.85f, 80000f, -0.5f, -1f, -0.3f)
-        nativeAddLight(0, 0.3f, 0.4f, 0.6f, 20000f, 0.5f, 0.5f, 0.5f)
-
-        nativeSetIBLIntensity(0.6f)
+        try {
+            nativeSetCamera(0f, 2.5f, 5f, 0f, 0.5f, 0f, 60f)
+            nativeAddLight(0, 1f, 0.95f, 0.85f, 80000f, -0.5f, -1f, -0.3f)
+            nativeAddLight(0, 0.3f, 0.4f, 0.6f, 20000f, 0.5f, 0.5f, 0.5f)
+            nativeSetIBLIntensity(0.6f)
+        } catch (t: Throwable) {
+            Log.e("Obris", "Error setting up default scene: ${t.message}")
+        }
     }
 
     // ── Touch Controls (orbit camera) ─────────────────────────
@@ -192,7 +216,7 @@ class ObrisActivity : AppCompatActivity() {
                     val y = (orbitDistance * Math.sin(radPitch)).toFloat()
                     val z = (orbitDistance * Math.cos(radPitch) * Math.cos(radYaw)).toFloat()
 
-                    nativeSetCamera(x, y + 1.5f, z, 0f, 1f, 0f, 60f)
+                    nativeSetCamera(x, y + 0.5f, z, 0f, 0.5f, 0f, 60f)
                 } else if (event.pointerCount == 2) {
                     orbitDistance = (orbitDistance - dy * 0.02f).coerceIn(1f, 20f)
                 }

@@ -23,6 +23,7 @@
 #include <filament/FilamentAPI.h>
 #include <utils/Entity.h>
 #include <utils/EntityManager.h>
+#include <utils/JobSystem.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
 #include <math/mat4.h>
@@ -38,6 +39,7 @@
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include <exception>
 #include <jni.h>
 
 #define LOG_TAG "ObrisRender"
@@ -226,234 +228,242 @@ void Renderer::createProceduralObjects() {
     auto* s = static_cast<Scene*>(scene_);
     if (!e || !s) return;
 
-    // IMPORTANT: Initialize filamat glslang compiler tables!
-    Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(nullptr, nullptr);
+    try {
+        // 1. Initialize filamat compiler
+        Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(nullptr, nullptr);
 
-    auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
+        // 2. Create isolated JobSystem for filamat shader compilation
+        utils::JobSystem jobSystem;
+        jobSystem.adopt();
 
-    // ── Build Unlit Material (for Grid & Gizmo lines) ─────────
-    filamat::MaterialBuilder unlitBuilder;
-    unlitBuilder.name("UnlitGridMat")
-                .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }")
-                .shading(filamat::MaterialBuilder::Shading::UNLIT)
-                .require(VertexAttribute::POSITION)
-                .require(VertexAttribute::COLOR)
-                .targetApi(targetApi);
+        auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
 
-    filamat::Package unlitPkg = unlitBuilder.build(e->getJobSystem());
-    if (unlitPkg.isValid()) {
-        auto* mat = Material::Builder()
-            .package(unlitPkg.getData(), unlitPkg.getSize())
+        // ── Build Unlit Material ──────────────────────────────
+        filamat::MaterialBuilder unlitBuilder;
+        unlitBuilder.name("UnlitGridMat")
+                    .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }")
+                    .shading(filamat::MaterialBuilder::Shading::UNLIT)
+                    .require(VertexAttribute::POSITION)
+                    .require(VertexAttribute::COLOR)
+                    .targetApi(targetApi);
+
+        filamat::Package unlitPkg = unlitBuilder.build(jobSystem);
+        if (unlitPkg.isValid()) {
+            auto* mat = Material::Builder()
+                .package(unlitPkg.getData(), unlitPkg.getSize())
+                .build(*e);
+            unlitMaterial_ = mat;
+            unlitMaterialInstance_ = mat->createInstance();
+            LOGI("Unlit material built successfully (%zu bytes)", unlitPkg.getSize());
+        } else {
+            LOGE("Failed to build unlit material package");
+        }
+
+        // ── Build Lit Material ────────────────────────────────
+        filamat::MaterialBuilder litBuilder;
+        litBuilder.name("LitCubeMat")
+                  .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }")
+                  .shading(filamat::MaterialBuilder::Shading::LIT)
+                  .require(VertexAttribute::POSITION)
+                  .require(VertexAttribute::COLOR)
+                  .require(VertexAttribute::TANGENTS)
+                  .targetApi(targetApi);
+
+        filamat::Package litPkg = litBuilder.build(jobSystem);
+        if (litPkg.isValid()) {
+            auto* mat = Material::Builder()
+                .package(litPkg.getData(), litPkg.getSize())
+                .build(*e);
+            litMaterial_ = mat;
+            litMaterialInstance_ = mat->createInstance();
+            LOGI("Lit material built successfully (%zu bytes)", litPkg.getSize());
+        } else {
+            LOGE("Failed to build lit material package");
+        }
+
+        jobSystem.emancipate();
+
+        if (!unlitMaterialInstance_ || !litMaterialInstance_) {
+            LOGE("Procedural materials missing — skipping mesh build");
+            return;
+        }
+
+        // ── Build Grid Floor & Axis Gizmo Mesh (LINES) ────────────
+        std::vector<GridVertex> gridVerts;
+        std::vector<uint16_t> gridIndices;
+
+        ubyte4 gridColorLine = packUnorm8(float4(0.40f, 0.42f, 0.46f, 0.6f));
+        ubyte4 axisXColor    = packUnorm8(float4(0.90f, 0.20f, 0.20f, 1.0f)); // Red X
+        ubyte4 axisYColor    = packUnorm8(float4(0.20f, 0.85f, 0.30f, 1.0f)); // Green Y
+        ubyte4 axisZColor    = packUnorm8(float4(0.20f, 0.50f, 0.90f, 1.0f)); // Blue Z
+
+        // Grid lines XZ plane from -15 to +15
+        float extent = 15.0f;
+        float step = 1.0f;
+
+        for (float i = -extent; i <= extent; i += step) {
+            // Parallel to Z
+            ubyte4 colZ = (std::abs(i) < 0.01f) ? axisZColor : gridColorLine;
+            gridVerts.push_back({ {i, 0.0f, -extent}, colZ });
+            gridVerts.push_back({ {i, 0.0f,  extent}, colZ });
+
+            // Parallel to X
+            ubyte4 colX = (std::abs(i) < 0.01f) ? axisXColor : gridColorLine;
+            gridVerts.push_back({ {-extent, 0.0f, i}, colX });
+            gridVerts.push_back({ { extent, 0.0f, i}, colX });
+        }
+
+        // 3D Translation Gizmo Arrows anchored at cube center (0, 0.5, 0)
+        float3 center(0.0f, 0.5f, 0.0f);
+
+        // X Axis (Red) Arrow Handle
+        gridVerts.push_back({ center, axisXColor });
+        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+        gridVerts.push_back({ center + float3(0.95f, 0.1f, 0.0f), axisXColor });
+        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
+        gridVerts.push_back({ center + float3(0.95f, -0.1f, 0.0f), axisXColor });
+
+        // Y Axis (Green) Arrow Handle
+        gridVerts.push_back({ center, axisYColor });
+        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+        gridVerts.push_back({ center + float3(0.1f, 1.05f, 0.0f), axisYColor });
+        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
+        gridVerts.push_back({ center + float3(-0.1f, 1.05f, 0.0f), axisYColor });
+
+        // Z Axis (Blue) Arrow Handle
+        gridVerts.push_back({ center, axisZColor });
+        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+        gridVerts.push_back({ center + float3(0.0f, 0.1f, 0.95f), axisZColor });
+        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
+        gridVerts.push_back({ center + float3(0.0f, -0.1f, 0.95f), axisZColor });
+
+        for (uint16_t i = 0; i < (uint16_t)gridVerts.size(); i++) {
+            gridIndices.push_back(i);
+        }
+
+        // Create Grid Vertex & Index Buffers
+        auto* vbGrid = VertexBuffer::Builder()
+            .vertexCount((uint32_t)gridVerts.size())
+            .bufferCount(1)
+            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(GridVertex, position), sizeof(GridVertex))
+            .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(GridVertex, color), sizeof(GridVertex))
+            .normalized(VertexAttribute::COLOR, true)
             .build(*e);
-        unlitMaterial_ = mat;
-        unlitMaterialInstance_ = mat->createInstance();
-        LOGI("Unlit material built successfully (%zu bytes)", unlitPkg.getSize());
-    } else {
-        LOGE("Failed to build unlit material package!");
-    }
 
-    // ── Build Lit Material (for Center 3D Cube) ───────────────
-    filamat::MaterialBuilder litBuilder;
-    litBuilder.name("LitCubeMat")
-              .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }")
-              .shading(filamat::MaterialBuilder::Shading::LIT)
-              .require(VertexAttribute::POSITION)
-              .require(VertexAttribute::COLOR)
-              .require(VertexAttribute::TANGENTS)
-              .targetApi(targetApi);
-
-    filamat::Package litPkg = litBuilder.build(e->getJobSystem());
-    if (litPkg.isValid()) {
-        auto* mat = Material::Builder()
-            .package(litPkg.getData(), litPkg.getSize())
+        auto* ibGrid = IndexBuffer::Builder()
+            .indexCount((uint32_t)gridIndices.size())
+            .bufferType(IndexBuffer::IndexType::USHORT)
             .build(*e);
-        litMaterial_ = mat;
-        litMaterialInstance_ = mat->createInstance();
-        LOGI("Lit material built successfully (%zu bytes)", litPkg.getSize());
-    } else {
-        LOGE("Failed to build lit material package!");
+
+        vbGrid->setBufferAt(*e, 0, backend::BufferDescriptor(gridVerts.data(), gridVerts.size() * sizeof(GridVertex)));
+        ibGrid->setBuffer(*e, backend::BufferDescriptor(gridIndices.data(), gridIndices.size() * sizeof(uint16_t)));
+
+        gridVb_ = vbGrid;
+        gridIb_ = ibGrid;
+
+        utils::Entity gridEntity = utils::EntityManager::get().create();
+        gridEntity_ = gridEntity.getId();
+
+        RenderableManager::Builder(1)
+            .boundingBox({ { -15.0f, -0.1f, -15.0f }, { 15.0f, 2.5f, 15.0f } })
+            .material(0, static_cast<MaterialInstance*>(unlitMaterialInstance_))
+            .geometry(0, RenderableManager::PrimitiveType::LINES, vbGrid, ibGrid, 0, (uint32_t)gridIndices.size())
+            .culling(false)
+            .receiveShadows(false)
+            .castShadows(false)
+            .build(*e, gridEntity);
+
+        s->addEntity(gridEntity);
+
+        // ── Build 3D Lit White Cube Mesh (TRIANGLES) ──────────────
+        std::vector<CubeVertex> cubeVerts;
+        std::vector<uint16_t> cubeIndices;
+
+        float minX = -0.5f, maxX = 0.5f;
+        float minY =  0.00f, maxY = 1.00f;
+        float minZ = -0.5f, maxZ = 0.5f;
+
+        ubyte4 colWhite = packUnorm8(float4(0.92f, 0.92f, 0.92f, 1.0f));
+
+        short4 qFront  = packSnorm16(float4(0.7071f, 0.0f, 0.0f, 0.7071f));
+        short4 qBack   = packSnorm16(float4(0.0f, 0.7071f, 0.7071f, 0.0f));
+        short4 qTop    = packSnorm16(float4(0.0f, 0.0f, 0.0f, 1.0f));
+        short4 qBottom = packSnorm16(float4(1.0f, 0.0f, 0.0f, 0.0f));
+        short4 qRight  = packSnorm16(float4(0.0f, 0.7071f, 0.0f, 0.7071f));
+        short4 qLeft   = packSnorm16(float4(0.0f, -0.7071f, 0.0f, 0.7071f));
+
+        auto addFace = [&](float3 p0, float3 p1, float3 p2, float3 p3, ubyte4 color, short4 q) {
+            uint16_t base = (uint16_t)cubeVerts.size();
+            cubeVerts.push_back({ p0, color, q });
+            cubeVerts.push_back({ p1, color, q });
+            cubeVerts.push_back({ p2, color, q });
+            cubeVerts.push_back({ p3, color, q });
+
+            cubeIndices.push_back(base + 0);
+            cubeIndices.push_back(base + 1);
+            cubeIndices.push_back(base + 2);
+
+            cubeIndices.push_back(base + 0);
+            cubeIndices.push_back(base + 2);
+            cubeIndices.push_back(base + 3);
+        };
+
+        // Front (+Z)
+        addFace({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, colWhite, qFront);
+        // Back (-Z)
+        addFace({maxX, minY, minZ}, {minX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ}, colWhite, qBack);
+        // Top (+Y)
+        addFace({minX, maxY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, colWhite, qTop);
+        // Bottom (-Y)
+        addFace({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, colWhite, qBottom);
+        // Right (+X)
+        addFace({maxX, minY, maxZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, colWhite, qRight);
+        // Left (-X)
+        addFace({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, colWhite, qLeft);
+
+        auto* vbCube = VertexBuffer::Builder()
+            .vertexCount((uint32_t)cubeVerts.size())
+            .bufferCount(1)
+            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(CubeVertex, position), sizeof(CubeVertex))
+            .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(CubeVertex, color), sizeof(CubeVertex))
+            .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::SHORT4, offsetof(CubeVertex, tangent), sizeof(CubeVertex))
+            .normalized(VertexAttribute::COLOR, true)
+            .normalized(VertexAttribute::TANGENTS, true)
+            .build(*e);
+
+        auto* ibCube = IndexBuffer::Builder()
+            .indexCount((uint32_t)cubeIndices.size())
+            .bufferType(IndexBuffer::IndexType::USHORT)
+            .build(*e);
+
+        vbCube->setBufferAt(*e, 0, backend::BufferDescriptor(cubeVerts.data(), cubeVerts.size() * sizeof(CubeVertex)));
+        ibCube->setBuffer(*e, backend::BufferDescriptor(cubeIndices.data(), cubeIndices.size() * sizeof(uint16_t)));
+
+        cubeVb_ = vbCube;
+        cubeIb_ = ibCube;
+
+        utils::Entity cubeEntity = utils::EntityManager::get().create();
+        cubeEntity_ = cubeEntity.getId();
+
+        RenderableManager::Builder(1)
+            .boundingBox({ { -0.75f, 0.0f, -0.75f }, { 0.75f, 1.5f, 0.75f } })
+            .material(0, static_cast<MaterialInstance*>(litMaterialInstance_))
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, vbCube, ibCube, 0, (uint32_t)cubeIndices.size())
+            .culling(true)
+            .receiveShadows(true)
+            .castShadows(true)
+            .build(*e, cubeEntity);
+
+        s->addEntity(cubeEntity);
+        LOGI("Grid floor, 3D Gizmo arrows & 3D Lit White Cube added to scene!");
+    } catch (const std::exception& ex) {
+        LOGE("Exception in createProceduralObjects: %s", ex.what());
+    } catch (...) {
+        LOGE("Unknown exception in createProceduralObjects");
     }
-
-    if (!unlitMaterialInstance_ || !litMaterialInstance_) {
-        LOGE("Procedural materials missing — skipping mesh build");
-        return;
-    }
-
-    // ── Build Grid Floor & Axis Gizmo Mesh (LINES) ────────────
-    std::vector<GridVertex> gridVerts;
-    std::vector<uint16_t> gridIndices;
-
-    ubyte4 gridColorLine = packUnorm8(float4(0.40f, 0.42f, 0.46f, 0.6f));
-    ubyte4 axisXColor    = packUnorm8(float4(0.90f, 0.20f, 0.20f, 1.0f)); // Red X
-    ubyte4 axisYColor    = packUnorm8(float4(0.20f, 0.85f, 0.30f, 1.0f)); // Green Y
-    ubyte4 axisZColor    = packUnorm8(float4(0.20f, 0.50f, 0.90f, 1.0f)); // Blue Z
-
-    // Grid lines XZ plane from -15 to +15
-    float extent = 15.0f;
-    float step = 1.0f;
-
-    for (float i = -extent; i <= extent; i += step) {
-        // Parallel to Z
-        ubyte4 colZ = (std::abs(i) < 0.01f) ? axisZColor : gridColorLine;
-        gridVerts.push_back({ {i, 0.0f, -extent}, colZ });
-        gridVerts.push_back({ {i, 0.0f,  extent}, colZ });
-
-        // Parallel to X
-        ubyte4 colX = (std::abs(i) < 0.01f) ? axisXColor : gridColorLine;
-        gridVerts.push_back({ {-extent, 0.0f, i}, colX });
-        gridVerts.push_back({ { extent, 0.0f, i}, colX });
-    }
-
-    // 3D Translation Gizmo Arrows anchored at cube center (0, 0.5, 0)
-    float3 center(0.0f, 0.5f, 0.0f);
-
-    // X Axis (Red) Arrow Handle
-    gridVerts.push_back({ center, axisXColor });
-    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-    // Arrow Tip X
-    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-    gridVerts.push_back({ center + float3(0.95f, 0.1f, 0.0f), axisXColor });
-    gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-    gridVerts.push_back({ center + float3(0.95f, -0.1f, 0.0f), axisXColor });
-
-    // Y Axis (Green) Arrow Handle
-    gridVerts.push_back({ center, axisYColor });
-    gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-    // Arrow Tip Y
-    gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-    gridVerts.push_back({ center + float3(0.1f, 1.05f, 0.0f), axisYColor });
-    gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-    gridVerts.push_back({ center + float3(-0.1f, 1.05f, 0.0f), axisYColor });
-
-    // Z Axis (Blue) Arrow Handle
-    gridVerts.push_back({ center, axisZColor });
-    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-    // Arrow Tip Z
-    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-    gridVerts.push_back({ center + float3(0.0f, 0.1f, 0.95f), axisZColor });
-    gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-    gridVerts.push_back({ center + float3(0.0f, -0.1f, 0.95f), axisZColor });
-
-    for (uint16_t i = 0; i < (uint16_t)gridVerts.size(); i++) {
-        gridIndices.push_back(i);
-    }
-
-    // Create Grid Vertex & Index Buffers
-    auto* vbGrid = VertexBuffer::Builder()
-        .vertexCount((uint32_t)gridVerts.size())
-        .bufferCount(1)
-        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(GridVertex, position), sizeof(GridVertex))
-        .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(GridVertex, color), sizeof(GridVertex))
-        .normalized(VertexAttribute::COLOR, true)
-        .build(*e);
-
-    auto* ibGrid = IndexBuffer::Builder()
-        .indexCount((uint32_t)gridIndices.size())
-        .bufferType(IndexBuffer::IndexType::USHORT)
-        .build(*e);
-
-    vbGrid->setBufferAt(*e, 0, backend::BufferDescriptor(gridVerts.data(), gridVerts.size() * sizeof(GridVertex)));
-    ibGrid->setBuffer(*e, backend::BufferDescriptor(gridIndices.data(), gridIndices.size() * sizeof(uint16_t)));
-
-    gridVb_ = vbGrid;
-    gridIb_ = ibGrid;
-
-    utils::Entity gridEntity = utils::EntityManager::get().create();
-    gridEntity_ = gridEntity.getId();
-
-    RenderableManager::Builder(1)
-        .boundingBox({ { -15.0f, -0.1f, -15.0f }, { 15.0f, 2.5f, 15.0f } })
-        .material(0, static_cast<MaterialInstance*>(unlitMaterialInstance_))
-        .geometry(0, RenderableManager::PrimitiveType::LINES, vbGrid, ibGrid, 0, (uint32_t)gridIndices.size())
-        .culling(false)
-        .receiveShadows(false)
-        .castShadows(false)
-        .build(*e, gridEntity);
-
-    s->addEntity(gridEntity);
-
-    // ── Build 3D Lit White Cube Mesh (TRIANGLES) ──────────────
-    std::vector<CubeVertex> cubeVerts;
-    std::vector<uint16_t> cubeIndices;
-
-    // Cube dimensions: 1.0 unit centered at Y = 0.5 (from Y=0.0 to Y=1.0)
-    float minX = -0.5f, maxX = 0.5f;
-    float minY =  0.00f, maxY = 1.00f;
-    float minZ = -0.5f, maxZ = 0.5f;
-
-    ubyte4 colWhite = packUnorm8(float4(0.92f, 0.92f, 0.92f, 1.0f));
-
-    short4 qFront  = packSnorm16(float4(0.7071f, 0.0f, 0.0f, 0.7071f));
-    short4 qBack   = packSnorm16(float4(0.0f, 0.7071f, 0.7071f, 0.0f));
-    short4 qTop    = packSnorm16(float4(0.0f, 0.0f, 0.0f, 1.0f));
-    short4 qBottom = packSnorm16(float4(1.0f, 0.0f, 0.0f, 0.0f));
-    short4 qRight  = packSnorm16(float4(0.0f, 0.7071f, 0.0f, 0.7071f));
-    short4 qLeft   = packSnorm16(float4(0.0f, -0.7071f, 0.0f, 0.7071f));
-
-    auto addFace = [&](float3 p0, float3 p1, float3 p2, float3 p3, ubyte4 color, short4 q) {
-        uint16_t base = (uint16_t)cubeVerts.size();
-        cubeVerts.push_back({ p0, color, q });
-        cubeVerts.push_back({ p1, color, q });
-        cubeVerts.push_back({ p2, color, q });
-        cubeVerts.push_back({ p3, color, q });
-
-        cubeIndices.push_back(base + 0);
-        cubeIndices.push_back(base + 1);
-        cubeIndices.push_back(base + 2);
-
-        cubeIndices.push_back(base + 0);
-        cubeIndices.push_back(base + 2);
-        cubeIndices.push_back(base + 3);
-    };
-
-    // Front (+Z)
-    addFace({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, colWhite, qFront);
-    // Back (-Z)
-    addFace({maxX, minY, minZ}, {minX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ}, colWhite, qBack);
-    // Top (+Y)
-    addFace({minX, maxY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, colWhite, qTop);
-    // Bottom (-Y)
-    addFace({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, colWhite, qBottom);
-    // Right (+X)
-    addFace({maxX, minY, maxZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, colWhite, qRight);
-    // Left (-X)
-    addFace({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, colWhite, qLeft);
-
-    auto* vbCube = VertexBuffer::Builder()
-        .vertexCount((uint32_t)cubeVerts.size())
-        .bufferCount(1)
-        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(CubeVertex, position), sizeof(CubeVertex))
-        .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(CubeVertex, color), sizeof(CubeVertex))
-        .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::SHORT4, offsetof(CubeVertex, tangent), sizeof(CubeVertex))
-        .normalized(VertexAttribute::COLOR, true)
-        .normalized(VertexAttribute::TANGENTS, true)
-        .build(*e);
-
-    auto* ibCube = IndexBuffer::Builder()
-        .indexCount((uint32_t)cubeIndices.size())
-        .bufferType(IndexBuffer::IndexType::USHORT)
-        .build(*e);
-
-    vbCube->setBufferAt(*e, 0, backend::BufferDescriptor(cubeVerts.data(), cubeVerts.size() * sizeof(CubeVertex)));
-    ibCube->setBuffer(*e, backend::BufferDescriptor(cubeIndices.data(), cubeIndices.size() * sizeof(uint16_t)));
-
-    cubeVb_ = vbCube;
-    cubeIb_ = ibCube;
-
-    utils::Entity cubeEntity = utils::EntityManager::get().create();
-    cubeEntity_ = cubeEntity.getId();
-
-    RenderableManager::Builder(1)
-        .boundingBox({ { -0.75f, 0.0f, -0.75f }, { 0.75f, 1.5f, 0.75f } })
-        .material(0, static_cast<MaterialInstance*>(litMaterialInstance_))
-        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, vbCube, ibCube, 0, (uint32_t)cubeIndices.size())
-        .culling(true)
-        .receiveShadows(true)
-        .castShadows(true)
-        .build(*e, cubeEntity);
-
-    s->addEntity(cubeEntity);
-    LOGI("Grid floor, 3D Gizmo arrows & 3D Lit White Cube added to scene!");
 #endif
 }
 

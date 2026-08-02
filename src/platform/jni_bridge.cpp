@@ -49,7 +49,7 @@ Java_com_obris_ObrisActivity_nativeCreate(
     config.width = width;
     config.height = height;
     config.nativeWindow = window;
-    config.useVulkan = 0;  // Use OpenGL ES 3 (EGL) for universal Android compatibility
+    config.useVulkan = 0;  // Use OpenGL ES 3
     config.iblPath = iblPath ? env->GetStringUTFChars(iblPath, nullptr) : nullptr;
 
     // Create renderer
@@ -58,6 +58,7 @@ Java_com_obris_ObrisActivity_nativeCreate(
         LOGE("Failed to init renderer");
         delete gEngine.renderer;
         gEngine.renderer = nullptr;
+        if (window) ANativeWindow_release(window);
         return 0;
     }
     gEngine.width = width;
