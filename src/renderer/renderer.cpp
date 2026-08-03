@@ -23,7 +23,6 @@
 #include <filament/FilamentAPI.h>
 #include <utils/Entity.h>
 #include <utils/EntityManager.h>
-#include <utils/JobSystem.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
 #include <math/mat4.h>
@@ -59,8 +58,11 @@ extern "C" {
     void  Java_com_google_android_filament_Engine_nDestroyBuilder(JNIEnv*, jclass, jlong builder);
     void  Java_com_google_android_filament_Engine_nDestroyEngine(JNIEnv*, jclass, jlong engine);
 
-    // filamat JNI initializer
+    // filamat JNI wrappers exported by libfilamat-jni.so
     void  Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(JNIEnv*, jclass);
+    jlong Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(JNIEnv*, jclass);
+    jlong Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(JNIEnv*, jclass, jlong builder, jlong jobSystem);
+    void  Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(JNIEnv*, jclass, jlong builder);
 }
 
 namespace obris {
@@ -232,56 +234,64 @@ void Renderer::createProceduralObjects() {
         // 1. Initialize filamat compiler
         Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(nullptr, nullptr);
 
-        // 2. Create isolated JobSystem for filamat shader compilation
-        utils::JobSystem jobSystem;
-        jobSystem.adopt();
-
         auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
 
         // ── Build Unlit Material ──────────────────────────────
-        filamat::MaterialBuilder unlitBuilder;
-        unlitBuilder.name("UnlitGridMat")
-                    .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }")
-                    .shading(filamat::MaterialBuilder::Shading::UNLIT)
-                    .require(VertexAttribute::POSITION)
-                    .require(VertexAttribute::COLOR)
-                    .targetApi(targetApi);
+        jlong bUnlit = Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(nullptr, nullptr);
+        if (bUnlit) {
+            auto* builder = reinterpret_cast<filamat::MaterialBuilder*>(bUnlit);
+            builder->name("UnlitGridMat");
+            builder->material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }");
+            builder->shading(filamat::MaterialBuilder::Shading::UNLIT);
+            builder->require(VertexAttribute::POSITION);
+            builder->require(VertexAttribute::COLOR);
+            builder->targetApi(targetApi);
 
-        filamat::Package unlitPkg = unlitBuilder.build(jobSystem);
-        if (unlitPkg.isValid()) {
-            auto* mat = Material::Builder()
-                .package(unlitPkg.getData(), unlitPkg.getSize())
-                .build(*e);
-            unlitMaterial_ = mat;
-            unlitMaterialInstance_ = mat->createInstance();
-            LOGI("Unlit material built successfully (%zu bytes)", unlitPkg.getSize());
-        } else {
-            LOGE("Failed to build unlit material package");
+            // Pass nativeJobSystem = 0.
+            // libfilamat-jni.so's nBuilderBuild handles JobSystem creation & cleanup internally!
+            jlong nativePkg = Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(nullptr, nullptr, bUnlit, 0);
+            auto* pkg = reinterpret_cast<filamat::Package*>(nativePkg);
+            if (pkg && pkg->isValid()) {
+                auto* mat = Material::Builder()
+                    .package(pkg->getData(), pkg->getSize())
+                    .build(*e);
+                unlitMaterial_ = mat;
+                unlitMaterialInstance_ = mat->createInstance();
+                LOGI("Unlit material built successfully (%zu bytes)", pkg->getSize());
+            } else {
+                LOGE("Failed to build unlit material package");
+            }
+            delete pkg;
+            Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(nullptr, nullptr, bUnlit);
         }
 
         // ── Build Lit Material ────────────────────────────────
-        filamat::MaterialBuilder litBuilder;
-        litBuilder.name("LitCubeMat")
-                  .material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }")
-                  .shading(filamat::MaterialBuilder::Shading::LIT)
-                  .require(VertexAttribute::POSITION)
-                  .require(VertexAttribute::COLOR)
-                  .require(VertexAttribute::TANGENTS)
-                  .targetApi(targetApi);
+        jlong bLit = Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(nullptr, nullptr);
+        if (bLit) {
+            auto* builder = reinterpret_cast<filamat::MaterialBuilder*>(bLit);
+            builder->name("LitCubeMat");
+            builder->material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }");
+            builder->shading(filamat::MaterialBuilder::Shading::LIT);
+            builder->require(VertexAttribute::POSITION);
+            builder->require(VertexAttribute::COLOR);
+            builder->require(VertexAttribute::TANGENTS);
+            builder->targetApi(targetApi);
 
-        filamat::Package litPkg = litBuilder.build(jobSystem);
-        if (litPkg.isValid()) {
-            auto* mat = Material::Builder()
-                .package(litPkg.getData(), litPkg.getSize())
-                .build(*e);
-            litMaterial_ = mat;
-            litMaterialInstance_ = mat->createInstance();
-            LOGI("Lit material built successfully (%zu bytes)", litPkg.getSize());
-        } else {
-            LOGE("Failed to build lit material package");
+            jlong nativePkg = Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(nullptr, nullptr, bLit, 0);
+            auto* pkg = reinterpret_cast<filamat::Package*>(nativePkg);
+            if (pkg && pkg->isValid()) {
+                auto* mat = Material::Builder()
+                    .package(pkg->getData(), pkg->getSize())
+                    .build(*e);
+                litMaterial_ = mat;
+                litMaterialInstance_ = mat->createInstance();
+                LOGI("Lit material built successfully (%zu bytes)", pkg->getSize());
+            } else {
+                LOGE("Failed to build lit material package");
+            }
+            delete pkg;
+            Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(nullptr, nullptr, bLit);
         }
-
-        jobSystem.emancipate();
 
         if (!unlitMaterialInstance_ || !litMaterialInstance_) {
             LOGE("Procedural materials missing — skipping mesh build");
