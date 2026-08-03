@@ -38,7 +38,7 @@ setup_filament() {
     [ ! -f "$out_dir/include/filament/Engine.h" ] && all_done=false
     [ ! -f "$out_dir/include/backend/BufferDescriptor.h" ] && all_done=false
     [ ! -f "$out_dir/include/utils/bitset.h" ] && all_done=false
-    [ ! -f "$out_dir/include/filament/MaterialEnums.h" ] && all_done=false
+    [ ! -f "$out_dir/include/tsl/robin_map.h" ] && all_done=false
 
     local h_count=0
     if [ -d "$out_dir/include" ]; then
@@ -88,13 +88,15 @@ except Exception as e:
     print(f'API error fetching tree: {e}', file=sys.stderr)
     sys.exit(1)
 
-target_roots = ['filament/', 'libs/']
 header_mappings = []
 
 for item in tree:
     if item['type'] == 'blob' and (item['path'].endswith('.h') or item['path'].endswith('.hpp')):
         path = item['path']
-        if any(path.startswith(r) for r in target_roots) and '/include/' in path:
+        if path.startswith('third_party/robin-map/'):
+            rel = path.replace('third_party/robin-map/', '')
+            header_mappings.append((path, rel))
+        elif any(path.startswith(r) for r in ['filament/', 'libs/']) and '/include/' in path:
             prefix, rel = path.split('/include/', 1)
             if 'third_party' not in prefix:
                 header_mappings.append((path, rel))
@@ -132,14 +134,13 @@ print(f'[OK] Downloaded {downloaded} Filament headers ({failed} failed)')
             curl -fsSL -o "$out_dir/include/backend/$h.h" "$gh/filament/backend/include/backend/$h.h" 2>/dev/null || true
         done
 
-        # Utils
-        mkdir -p "$out_dir/include/utils" "$out_dir/include/utils/linux" "$out_dir/include/utils/generic" "$out_dir/include/utils/android"
+        # Utils & tsl
+        mkdir -p "$out_dir/include/utils" "$out_dir/include/tsl" "$out_dir/include/utils/linux" "$out_dir/include/utils/generic" "$out_dir/include/utils/android"
         for h in Allocator BitmaskEnum CString CallStack Condition CountDownLatch CyclicBarrier Entity EntityInstance EntityManager FixedCapacityVector FixedCircularBuffer Hash Invocable JobSystem Log Mutex NameComponentManager Panic Path PrivateImplementation Profiler QuadTree Range RangeMap SingleInstanceComponentManager Slice Stopwatch StructureOfArrays Systrace ThermalManager ThreadUtils WorkStealingDequeue Zip2Iterator algorithm api_level architecture ashmem bitset compiler compressed_pair debug memalign ostream sstream string trap unwindows vector; do
             curl -fsSL -o "$out_dir/include/utils/$h.h" "$gh/libs/utils/include/utils/$h.h" 2>/dev/null || true
         done
-        for h in Condition Mutex; do
-            curl -fsSL -o "$out_dir/include/utils/linux/$h.h" "$gh/libs/utils/include/utils/linux/$h.h" 2>/dev/null || true
-            curl -fsSL -o "$out_dir/include/utils/generic/$h.h" "$gh/libs/utils/include/utils/generic/$h.h" 2>/dev/null || true
+        for h in robin_map robin_hash robin_growth_policy robin_set; do
+            curl -fsSL -o "$out_dir/include/tsl/$h.h" "$gh/third_party/robin-map/tsl/$h.h" 2>/dev/null || true
         done
 
         # Math
@@ -161,6 +162,7 @@ print(f'[OK] Downloaded {downloaded} Filament headers ({failed} failed)')
         [ -f "$f" ] && ok "Filament $ABI — $(wc -c < "$f") bytes"
     done
     [ -f "$out_dir/include/filament/Engine.h" ] && ok "filament/Engine.h ready"
+    [ -f "$out_dir/include/tsl/robin_map.h" ] && ok "tsl/robin_map.h ready"
     [ -f "$out_dir/include/backend/BufferDescriptor.h" ] && ok "backend/BufferDescriptor.h ready"
     [ -f "$out_dir/include/utils/bitset.h" ] && ok "utils/bitset.h ready"
 }
