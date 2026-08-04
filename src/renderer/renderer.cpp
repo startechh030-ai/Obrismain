@@ -29,12 +29,17 @@
 #include <math/mat3.h>
 #include <math/quat.h>
 #include <math/norm.h>
+#include <gltfio/AssetLoader.h>
+#include <gltfio/ResourceLoader.h>
+#include <gltfio/FilamentAsset.h>
+#include <gltfio/MaterialProvider.h>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/asset_manager.h>
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include <exception>
 #include <jni.h>
 
 #define LOG_TAG "ObrisRender"
@@ -129,7 +134,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     auto* s = e->createScene();
     scene_ = s;
 
-    // 5. Create Camera (Angled viewport looking at center)
+    // 5. Create Camera (Angled viewport looking at origin)
     utils::Entity camEntity = utils::EntityManager::get().create();
     cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
@@ -161,7 +166,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     utils::Entity sunEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
         .color(Color::toLinear({1.0f, 0.98f, 0.94f}))
-        .intensity(110000.0f)
+        .intensity(120000.0f)
         .direction({-0.6f, -1.0f, -0.4f})
         .castShadows(true)
         .build(*e, sunEntity);
@@ -171,7 +176,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     utils::Entity fillEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
         .color(Color::toLinear({0.5f, 0.65f, 0.85f}))
-        .intensity(35000.0f)
+        .intensity(40000.0f)
         .direction({0.6f, 0.8f, 0.5f})
         .castShadows(false)
         .build(*e, fillEntity);
@@ -183,6 +188,31 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     leFill.entityId = fillEntity.getId(); leFill.active = true;
     lights_.push_back(leSun);
     lights_.push_back(leFill);
+
+    // 10. Load precompiled grid.filamat from assets if present
+    AAssetManager* aam = getAam();
+    if (aam) {
+        AAsset* matAsset = AAssetManager_open(aam, "grid.filamat", AASSET_MODE_BUFFER);
+        if (matAsset) {
+            size_t size = AAsset_getLength(matAsset);
+            const void* data = AAsset_getBuffer(matAsset);
+
+            auto* mat = Material::Builder()
+                .package(data, size)
+                .build(*e);
+
+            if (mat) {
+                unlitMaterial_ = mat;
+                unlitMaterialInstance_ = mat->createInstance();
+                LOGI("Loaded precompiled grid.filamat (%zu bytes)", size);
+            } else {
+                LOGE("Failed to build Material from grid.filamat");
+            }
+            AAsset_close(matAsset);
+        } else {
+            LOGI("grid.filamat not present in assets");
+        }
+    }
 
     LOGI("Filament init complete");
     return true;
@@ -207,21 +237,31 @@ void Renderer::shutdown() {
 
     auto* s = static_cast<Scene*>(scene_);
 
+    if (unlitMaterialInstance_) { e->destroy(static_cast<MaterialInstance*>(unlitMaterialInstance_)); unlitMaterialInstance_ = nullptr; }
+    if (unlitMaterial_) { e->destroy(static_cast<Material*>(unlitMaterial_)); unlitMaterial_ = nullptr; }
+
     // Unload models
     for (auto& [id, model] : models_) {
-        if (model.entities && model.entityCount > 0) {
-            auto* ents = static_cast<utils::Entity*>(model.entities);
-            for (uint32_t i = 0; i < model.entityCount; i++) {
-                if (!ents[i].isNull()) {
-                    if (s) s->remove(ents[i]);
-                    e->destroy(ents[i]);
-                }
+        if (model.filamentAsset) {
+            auto* fa = static_cast<gltfio::FilamentAsset*>(model.filamentAsset);
+            if (assetLoader_) {
+                auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
+                loader->destroyAsset(fa);
             }
-            delete[] ents;
+            model.filamentAsset = nullptr;
+        }
+        if (model.entities && model.entityCount > 0) {
+            delete[] static_cast<utils::Entity*>(model.entities);
             model.entities = nullptr;
         }
     }
     models_.clear();
+
+    if (assetLoader_) {
+        auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
+        gltfio::AssetLoader::destroy(&loader);
+        assetLoader_ = nullptr;
+    }
 
     // Destroy lights
     for (auto& l : lights_) {
@@ -399,7 +439,7 @@ void Renderer::removeLight(int idx) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  Models / GLB
+//  Models / GLB Loading via gltfio
 // ══════════════════════════════════════════════════════════════
 
 ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
@@ -416,8 +456,56 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
     else            { model.scale[0]=1; model.scale[1]=1; model.scale[2]=1; }
 
 #if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT
+    AAssetManager* aam = getAam();
+    auto* e = static_cast<filament::Engine*>(engine_);
+    auto* s = static_cast<filament::Scene*>(scene_);
+
+    if (aam && e && s && info.path && info.path[0] != '\0') {
+        AAsset* glbAsset = AAssetManager_open(aam, info.path, AASSET_MODE_BUFFER);
+        if (glbAsset) {
+            size_t size = AAsset_getLength(glbAsset);
+            const void* data = AAsset_getBuffer(glbAsset);
+
+            if (!assetLoader_) {
+                auto* materials = filament::gltfio::createUbershaderProvider(e);
+                filament::gltfio::AssetConfiguration config;
+                config.engine = e;
+                config.materials = materials;
+                assetLoader_ = filament::gltfio::AssetLoader::create(config);
+            }
+
+            auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
+            if (loader) {
+                auto* fa = loader->createAssetFromBinary(static_cast<const uint8_t*>(data), size);
+                if (fa) {
+                    model.filamentAsset = fa;
+
+                    filament::gltfio::ResourceConfiguration resConfig;
+                    resConfig.engine = e;
+                    resConfig.gltfPath = info.path;
+                    resConfig.normalizeSkinningWeights = true;
+
+                    filament::gltfio::ResourceLoader resourceLoader(resConfig);
+                    resourceLoader.loadResources(fa);
+
+                    uint32_t count = (uint32_t)fa->getEntityCount();
+                    model.entityCount = count;
+                    model.entities = new utils::Entity[count];
+                    memcpy(model.entities, fa->getEntities(), sizeof(utils::Entity) * count);
+
+                    s->addEntities(fa->getEntities(), count);
+                    LOGI("Loaded GLB model via gltfio: %s (%u entities)", model.path.c_str(), count);
+                } else {
+                    LOGE("gltfio createAssetFromBinary failed for: %s", model.path.c_str());
+                }
+            }
+            AAsset_close(glbAsset);
+        } else {
+            LOGE("Failed to open GLB asset file: %s", model.path.c_str());
+        }
+    }
+
     applyModelTransform(model);
-    LOGI("Loaded model placeholder: %s (id=%u)", model.path.c_str(), id);
 #else
     LOGI("Load model stub: %s (id=%u)", info.path, id);
 #endif
@@ -438,15 +526,18 @@ void Renderer::unloadModel(ObrisModel id) {
     auto* e = static_cast<filament::Engine*>(engine_);
     auto* s = static_cast<filament::Scene*>(scene_);
 
-    if (it->second.entities && it->second.entityCount > 0) {
-        auto* ents = static_cast<utils::Entity*>(it->second.entities);
-        for (uint32_t i = 0; i < it->second.entityCount; i++) {
-            if (!ents[i].isNull()) {
-                if (s) s->remove(ents[i]);
-                if (e) e->destroy(ents[i]);
-            }
+    if (it->second.filamentAsset && assetLoader_) {
+        auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
+        auto* fa = static_cast<gltfio::FilamentAsset*>(it->second.filamentAsset);
+        if (s) {
+            s->removeEntities(fa->getEntities(), fa->getEntityCount());
         }
-        delete[] ents;
+        loader->destroyAsset(fa);
+        it->second.filamentAsset = nullptr;
+    }
+
+    if (it->second.entities) {
+        delete[] static_cast<utils::Entity*>(it->second.entities);
         it->second.entities = nullptr;
     }
 #endif
