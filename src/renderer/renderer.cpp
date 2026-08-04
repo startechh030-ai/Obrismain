@@ -29,16 +29,12 @@
 #include <math/mat3.h>
 #include <math/quat.h>
 #include <math/norm.h>
-#if defined(OBRIS_USE_FILAMAT) && OBRIS_USE_FILAMAT
-#include <filamat/MaterialBuilder.h>
-#endif
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/asset_manager.h>
 #include <cstring>
 #include <cmath>
 #include <vector>
-#include <exception>
 #include <jni.h>
 
 #define LOG_TAG "ObrisRender"
@@ -50,34 +46,16 @@ static AAssetManager* getAam() {
     return static_cast<AAssetManager*>(obris::getAssetManager());
 }
 
-// ── JNI wrappers exported from libfilament-jni.so & libfilamat-jni.so ────
+// ── JNI wrappers exported from libfilament-jni.so ────────────
 extern "C" {
     jlong Java_com_google_android_filament_Engine_nCreateBuilder(JNIEnv*, jclass);
     void  Java_com_google_android_filament_Engine_nSetBuilderBackend(JNIEnv*, jclass, jlong builder, jint backend);
     jlong Java_com_google_android_filament_Engine_nBuilderBuild(JNIEnv*, jclass, jlong builder);
     void  Java_com_google_android_filament_Engine_nDestroyBuilder(JNIEnv*, jclass, jlong builder);
     void  Java_com_google_android_filament_Engine_nDestroyEngine(JNIEnv*, jclass, jlong engine);
-
-    // filamat JNI wrappers exported by libfilamat-jni.so
-    void  Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(JNIEnv*, jclass);
-    jlong Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(JNIEnv*, jclass);
-    jlong Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(JNIEnv*, jclass, jlong builder, jlong jobSystem);
-    void  Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(JNIEnv*, jclass, jlong builder);
 }
 
 namespace obris {
-
-// Vertex structures
-struct GridVertex {
-    filament::math::float3 position;
-    filament::math::ubyte4 color;
-};
-
-struct CubeVertex {
-    filament::math::float3 position;
-    filament::math::ubyte4 color;
-    filament::math::short4 tangent;
-};
 
 // ══════════════════════════════════════════════════════════════
 //  Renderer Constructor / Destructor
@@ -151,7 +129,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     auto* s = e->createScene();
     scene_ = s;
 
-    // 5. Create Camera (Angled viewport looking at center cube and grid)
+    // 5. Create Camera (Angled viewport looking at center)
     utils::Entity camEntity = utils::EntityManager::get().create();
     cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
@@ -206,274 +184,11 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     lights_.push_back(leSun);
     lights_.push_back(leFill);
 
-    // 10. Create 3D Grid Floor, Axis Gizmo & 3D Center Cube
-    createProceduralObjects();
-
     LOGI("Filament init complete");
     return true;
 #else
     (void)config;
     return true;
-#endif
-}
-
-// ══════════════════════════════════════════════════════════════
-//  Create Procedural Objects (Grid, Gizmo, 3D Center Cube)
-// ══════════════════════════════════════════════════════════════
-
-void Renderer::createProceduralObjects() {
-#if defined(OBRIS_USE_FILAMENT) && OBRIS_USE_FILAMENT && defined(OBRIS_USE_FILAMAT) && OBRIS_USE_FILAMAT
-    using namespace filament;
-    using namespace filament::math;
-
-    auto* e = static_cast<Engine*>(engine_);
-    auto* s = static_cast<Scene*>(scene_);
-    if (!e || !s) return;
-
-    try {
-        // 1. Initialize filamat compiler
-        Java_com_google_android_filament_filamat_MaterialBuilder_nMaterialBuilderInit(nullptr, nullptr);
-
-        auto targetApi = filamat::MaterialBuilder::TargetApi::OPENGL;
-
-        // ── Build Unlit Material ──────────────────────────────
-        jlong bUnlit = Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(nullptr, nullptr);
-        if (bUnlit) {
-            auto* builder = reinterpret_cast<filamat::MaterialBuilder*>(bUnlit);
-            builder->name("UnlitGridMat");
-            builder->material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); }");
-            builder->shading(filamat::MaterialBuilder::Shading::UNLIT);
-            builder->require(VertexAttribute::POSITION);
-            builder->require(VertexAttribute::COLOR);
-            builder->targetApi(targetApi);
-
-            // Pass nativeJobSystem = 0.
-            // libfilamat-jni.so's nBuilderBuild handles JobSystem creation & cleanup internally!
-            jlong nativePkg = Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(nullptr, nullptr, bUnlit, 0);
-            auto* pkg = reinterpret_cast<filamat::Package*>(nativePkg);
-            if (pkg && pkg->isValid()) {
-                auto* mat = Material::Builder()
-                    .package(pkg->getData(), pkg->getSize())
-                    .build(*e);
-                unlitMaterial_ = mat;
-                unlitMaterialInstance_ = mat->createInstance();
-                LOGI("Unlit material built successfully (%zu bytes)", pkg->getSize());
-            } else {
-                LOGE("Failed to build unlit material package");
-            }
-            delete pkg;
-            Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(nullptr, nullptr, bUnlit);
-        }
-
-        // ── Build Lit Material ────────────────────────────────
-        jlong bLit = Java_com_google_android_filament_filamat_MaterialBuilder_nCreateMaterialBuilder(nullptr, nullptr);
-        if (bLit) {
-            auto* builder = reinterpret_cast<filamat::MaterialBuilder*>(bLit);
-            builder->name("LitCubeMat");
-            builder->material("void material(inout MaterialInputs material) { prepareMaterial(material); material.baseColor = getColor(); material.roughness = 0.35; material.metallic = 0.20; }");
-            builder->shading(filamat::MaterialBuilder::Shading::LIT);
-            builder->require(VertexAttribute::POSITION);
-            builder->require(VertexAttribute::COLOR);
-            builder->require(VertexAttribute::TANGENTS);
-            builder->targetApi(targetApi);
-
-            jlong nativePkg = Java_com_google_android_filament_filamat_MaterialBuilder_nBuilderBuild(nullptr, nullptr, bLit, 0);
-            auto* pkg = reinterpret_cast<filamat::Package*>(nativePkg);
-            if (pkg && pkg->isValid()) {
-                auto* mat = Material::Builder()
-                    .package(pkg->getData(), pkg->getSize())
-                    .build(*e);
-                litMaterial_ = mat;
-                litMaterialInstance_ = mat->createInstance();
-                LOGI("Lit material built successfully (%zu bytes)", pkg->getSize());
-            } else {
-                LOGE("Failed to build lit material package");
-            }
-            delete pkg;
-            Java_com_google_android_filament_filamat_MaterialBuilder_nDestroyMaterialBuilder(nullptr, nullptr, bLit);
-        }
-
-        if (!unlitMaterialInstance_ || !litMaterialInstance_) {
-            LOGE("Procedural materials missing — skipping mesh build");
-            return;
-        }
-
-        // ── Build Grid Floor & Axis Gizmo Mesh (LINES) ────────────
-        std::vector<GridVertex> gridVerts;
-        std::vector<uint16_t> gridIndices;
-
-        ubyte4 gridColorLine = packUnorm8(float4(0.40f, 0.42f, 0.46f, 0.6f));
-        ubyte4 axisXColor    = packUnorm8(float4(0.90f, 0.20f, 0.20f, 1.0f)); // Red X
-        ubyte4 axisYColor    = packUnorm8(float4(0.20f, 0.85f, 0.30f, 1.0f)); // Green Y
-        ubyte4 axisZColor    = packUnorm8(float4(0.20f, 0.50f, 0.90f, 1.0f)); // Blue Z
-
-        // Grid lines XZ plane from -15 to +15
-        float extent = 15.0f;
-        float step = 1.0f;
-
-        for (float i = -extent; i <= extent; i += step) {
-            // Parallel to Z
-            ubyte4 colZ = (std::abs(i) < 0.01f) ? axisZColor : gridColorLine;
-            gridVerts.push_back({ {i, 0.0f, -extent}, colZ });
-            gridVerts.push_back({ {i, 0.0f,  extent}, colZ });
-
-            // Parallel to X
-            ubyte4 colX = (std::abs(i) < 0.01f) ? axisXColor : gridColorLine;
-            gridVerts.push_back({ {-extent, 0.0f, i}, colX });
-            gridVerts.push_back({ { extent, 0.0f, i}, colX });
-        }
-
-        // 3D Translation Gizmo Arrows anchored at cube center (0, 0.5, 0)
-        float3 center(0.0f, 0.5f, 0.0f);
-
-        // X Axis (Red) Arrow Handle
-        gridVerts.push_back({ center, axisXColor });
-        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-        gridVerts.push_back({ center + float3(0.95f, 0.1f, 0.0f), axisXColor });
-        gridVerts.push_back({ center + float3(1.1f, 0.0f, 0.0f), axisXColor });
-        gridVerts.push_back({ center + float3(0.95f, -0.1f, 0.0f), axisXColor });
-
-        // Y Axis (Green) Arrow Handle
-        gridVerts.push_back({ center, axisYColor });
-        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-        gridVerts.push_back({ center + float3(0.1f, 1.05f, 0.0f), axisYColor });
-        gridVerts.push_back({ center + float3(0.0f, 1.2f, 0.0f), axisYColor });
-        gridVerts.push_back({ center + float3(-0.1f, 1.05f, 0.0f), axisYColor });
-
-        // Z Axis (Blue) Arrow Handle
-        gridVerts.push_back({ center, axisZColor });
-        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-        gridVerts.push_back({ center + float3(0.0f, 0.1f, 0.95f), axisZColor });
-        gridVerts.push_back({ center + float3(0.0f, 0.0f, 1.1f), axisZColor });
-        gridVerts.push_back({ center + float3(0.0f, -0.1f, 0.95f), axisZColor });
-
-        for (uint16_t i = 0; i < (uint16_t)gridVerts.size(); i++) {
-            gridIndices.push_back(i);
-        }
-
-        // Create Grid Vertex & Index Buffers
-        auto* vbGrid = VertexBuffer::Builder()
-            .vertexCount((uint32_t)gridVerts.size())
-            .bufferCount(1)
-            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(GridVertex, position), sizeof(GridVertex))
-            .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(GridVertex, color), sizeof(GridVertex))
-            .normalized(VertexAttribute::COLOR, true)
-            .build(*e);
-
-        auto* ibGrid = IndexBuffer::Builder()
-            .indexCount((uint32_t)gridIndices.size())
-            .bufferType(IndexBuffer::IndexType::USHORT)
-            .build(*e);
-
-        vbGrid->setBufferAt(*e, 0, backend::BufferDescriptor(gridVerts.data(), gridVerts.size() * sizeof(GridVertex)));
-        ibGrid->setBuffer(*e, backend::BufferDescriptor(gridIndices.data(), gridIndices.size() * sizeof(uint16_t)));
-
-        gridVb_ = vbGrid;
-        gridIb_ = ibGrid;
-
-        utils::Entity gridEntity = utils::EntityManager::get().create();
-        gridEntity_ = gridEntity.getId();
-
-        RenderableManager::Builder(1)
-            .boundingBox({ { -15.0f, -0.1f, -15.0f }, { 15.0f, 2.5f, 15.0f } })
-            .material(0, static_cast<MaterialInstance*>(unlitMaterialInstance_))
-            .geometry(0, RenderableManager::PrimitiveType::LINES, vbGrid, ibGrid, 0, (uint32_t)gridIndices.size())
-            .culling(false)
-            .receiveShadows(false)
-            .castShadows(false)
-            .build(*e, gridEntity);
-
-        s->addEntity(gridEntity);
-
-        // ── Build 3D Lit White Cube Mesh (TRIANGLES) ──────────────
-        std::vector<CubeVertex> cubeVerts;
-        std::vector<uint16_t> cubeIndices;
-
-        float minX = -0.5f, maxX = 0.5f;
-        float minY =  0.00f, maxY = 1.00f;
-        float minZ = -0.5f, maxZ = 0.5f;
-
-        ubyte4 colWhite = packUnorm8(float4(0.92f, 0.92f, 0.92f, 1.0f));
-
-        short4 qFront  = packSnorm16(float4(0.7071f, 0.0f, 0.0f, 0.7071f));
-        short4 qBack   = packSnorm16(float4(0.0f, 0.7071f, 0.7071f, 0.0f));
-        short4 qTop    = packSnorm16(float4(0.0f, 0.0f, 0.0f, 1.0f));
-        short4 qBottom = packSnorm16(float4(1.0f, 0.0f, 0.0f, 0.0f));
-        short4 qRight  = packSnorm16(float4(0.0f, 0.7071f, 0.0f, 0.7071f));
-        short4 qLeft   = packSnorm16(float4(0.0f, -0.7071f, 0.0f, 0.7071f));
-
-        auto addFace = [&](float3 p0, float3 p1, float3 p2, float3 p3, ubyte4 color, short4 q) {
-            uint16_t base = (uint16_t)cubeVerts.size();
-            cubeVerts.push_back({ p0, color, q });
-            cubeVerts.push_back({ p1, color, q });
-            cubeVerts.push_back({ p2, color, q });
-            cubeVerts.push_back({ p3, color, q });
-
-            cubeIndices.push_back(base + 0);
-            cubeIndices.push_back(base + 1);
-            cubeIndices.push_back(base + 2);
-
-            cubeIndices.push_back(base + 0);
-            cubeIndices.push_back(base + 2);
-            cubeIndices.push_back(base + 3);
-        };
-
-        // Front (+Z)
-        addFace({minX, minY, maxZ}, {maxX, minY, maxZ}, {maxX, maxY, maxZ}, {minX, maxY, maxZ}, colWhite, qFront);
-        // Back (-Z)
-        addFace({maxX, minY, minZ}, {minX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ}, colWhite, qBack);
-        // Top (+Y)
-        addFace({minX, maxY, maxZ}, {maxX, maxY, maxZ}, {maxX, maxY, minZ}, {minX, maxY, minZ}, colWhite, qTop);
-        // Bottom (-Y)
-        addFace({minX, minY, minZ}, {maxX, minY, minZ}, {maxX, minY, maxZ}, {minX, minY, maxZ}, colWhite, qBottom);
-        // Right (+X)
-        addFace({maxX, minY, maxZ}, {maxX, minY, minZ}, {maxX, maxY, minZ}, {maxX, maxY, maxZ}, colWhite, qRight);
-        // Left (-X)
-        addFace({minX, minY, minZ}, {minX, minY, maxZ}, {minX, maxY, maxZ}, {minX, maxY, minZ}, colWhite, qLeft);
-
-        auto* vbCube = VertexBuffer::Builder()
-            .vertexCount((uint32_t)cubeVerts.size())
-            .bufferCount(1)
-            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(CubeVertex, position), sizeof(CubeVertex))
-            .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, offsetof(CubeVertex, color), sizeof(CubeVertex))
-            .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::SHORT4, offsetof(CubeVertex, tangent), sizeof(CubeVertex))
-            .normalized(VertexAttribute::COLOR, true)
-            .normalized(VertexAttribute::TANGENTS, true)
-            .build(*e);
-
-        auto* ibCube = IndexBuffer::Builder()
-            .indexCount((uint32_t)cubeIndices.size())
-            .bufferType(IndexBuffer::IndexType::USHORT)
-            .build(*e);
-
-        vbCube->setBufferAt(*e, 0, backend::BufferDescriptor(cubeVerts.data(), cubeVerts.size() * sizeof(CubeVertex)));
-        ibCube->setBuffer(*e, backend::BufferDescriptor(cubeIndices.data(), cubeIndices.size() * sizeof(uint16_t)));
-
-        cubeVb_ = vbCube;
-        cubeIb_ = ibCube;
-
-        utils::Entity cubeEntity = utils::EntityManager::get().create();
-        cubeEntity_ = cubeEntity.getId();
-
-        RenderableManager::Builder(1)
-            .boundingBox({ { -0.75f, 0.0f, -0.75f }, { 0.75f, 1.5f, 0.75f } })
-            .material(0, static_cast<MaterialInstance*>(litMaterialInstance_))
-            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, vbCube, ibCube, 0, (uint32_t)cubeIndices.size())
-            .culling(true)
-            .receiveShadows(true)
-            .castShadows(true)
-            .build(*e, cubeEntity);
-
-        s->addEntity(cubeEntity);
-        LOGI("Grid floor, 3D Gizmo arrows & 3D Lit White Cube added to scene!");
-    } catch (const std::exception& ex) {
-        LOGE("Exception in createProceduralObjects: %s", ex.what());
-    } catch (...) {
-        LOGE("Unknown exception in createProceduralObjects");
-    }
 #endif
 }
 
@@ -491,27 +206,6 @@ void Renderer::shutdown() {
     if (!e) return;
 
     auto* s = static_cast<Scene*>(scene_);
-
-    // Destroy procedural objects
-    if (gridEntity_ != 0) {
-        if (s) s->remove(utils::Entity::import(gridEntity_));
-        e->destroy(utils::Entity::import(gridEntity_));
-        gridEntity_ = 0;
-    }
-    if (cubeEntity_ != 0) {
-        if (s) s->remove(utils::Entity::import(cubeEntity_));
-        e->destroy(utils::Entity::import(cubeEntity_));
-        cubeEntity_ = 0;
-    }
-    if (gridVb_) { e->destroy(static_cast<VertexBuffer*>(gridVb_)); gridVb_ = nullptr; }
-    if (gridIb_) { e->destroy(static_cast<IndexBuffer*>(gridIb_)); gridIb_ = nullptr; }
-    if (cubeVb_) { e->destroy(static_cast<VertexBuffer*>(cubeVb_)); cubeVb_ = nullptr; }
-    if (cubeIb_) { e->destroy(static_cast<IndexBuffer*>(cubeIb_)); cubeIb_ = nullptr; }
-
-    if (unlitMaterialInstance_) { e->destroy(static_cast<MaterialInstance*>(unlitMaterialInstance_)); unlitMaterialInstance_ = nullptr; }
-    if (unlitMaterial_) { e->destroy(static_cast<Material*>(unlitMaterial_)); unlitMaterial_ = nullptr; }
-    if (litMaterialInstance_) { e->destroy(static_cast<MaterialInstance*>(litMaterialInstance_)); litMaterialInstance_ = nullptr; }
-    if (litMaterial_) { e->destroy(static_cast<Material*>(litMaterial_)); litMaterial_ = nullptr; }
 
     // Unload models
     for (auto& [id, model] : models_) {

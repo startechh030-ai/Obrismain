@@ -85,20 +85,6 @@ private:
     void* indirectLight_ = nullptr;  // filament::IndirectLight*
     void* assetLoader_ = nullptr;    // gltfio::AssetLoader*
 
-    // Procedural Grid, Gizmo & 3D Center Cube
-    void* gridVb_ = nullptr;
-    void* gridIb_ = nullptr;
-    uint32_t gridEntity_ = 0;
-
-    void* cubeVb_ = nullptr;
-    void* cubeIb_ = nullptr;
-    uint32_t cubeEntity_ = 0;
-
-    void* unlitMaterial_ = nullptr;
-    void* unlitMaterialInstance_ = nullptr;
-    void* litMaterial_ = nullptr;
-    void* litMaterialInstance_ = nullptr;
-
     // Camera state
     ObrisCamera cameraState_;
 
@@ -112,13 +98,12 @@ private:
     int height_ = 1280;
 
     // Clear color
-    float clearR_ = 0.12f, clearG_ = 0.18f, clearB_ = 0.32f, clearA_ = 1.0f;
+    float clearR_ = 0.22f, clearG_ = 0.23f, clearB_ = 0.25f, clearA_ = 1.0f;
 
     // Internal helpers
     bool initFilament(const ObrisConfig& config);
     void applyCameraToFilament();
     void applyModelTransform(LoadedModel& model);
-    void createProceduralObjects();
 };
 
 } // namespace obris
