@@ -85,6 +85,10 @@ private:
     void* indirectLight_ = nullptr;  // filament::IndirectLight*
     void* assetLoader_ = nullptr;    // gltfio::AssetLoader*
 
+    // Materials
+    void* unlitMaterial_ = nullptr;
+    void* unlitMaterialInstance_ = nullptr;
+
     // Camera state
     ObrisCamera cameraState_;
 

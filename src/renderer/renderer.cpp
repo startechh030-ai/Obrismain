@@ -166,7 +166,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     utils::Entity sunEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
         .color(Color::toLinear({1.0f, 0.98f, 0.94f}))
-        .intensity(120000.0f)
+        .intensity(110000.0f)
         .direction({-0.6f, -1.0f, -0.4f})
         .castShadows(true)
         .build(*e, sunEntity);
@@ -176,7 +176,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     utils::Entity fillEntity = utils::EntityManager::get().create();
     LightManager::Builder(LightManager::Type::DIRECTIONAL)
         .color(Color::toLinear({0.5f, 0.65f, 0.85f}))
-        .intensity(40000.0f)
+        .intensity(35000.0f)
         .direction({0.6f, 0.8f, 0.5f})
         .castShadows(false)
         .build(*e, fillEntity);
@@ -242,12 +242,13 @@ void Renderer::shutdown() {
 
     // Unload models
     for (auto& [id, model] : models_) {
-        if (model.filamentAsset) {
-            auto* fa = static_cast<gltfio::FilamentAsset*>(model.filamentAsset);
-            if (assetLoader_) {
-                auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
-                loader->destroyAsset(fa);
+        if (model.filamentAsset && assetLoader_) {
+            auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
+            auto* fa = static_cast<filament::gltfio::FilamentAsset*>(model.filamentAsset);
+            if (s) {
+                s->removeEntities(fa->getEntities(), fa->getEntityCount());
             }
+            loader->destroyAsset(fa);
             model.filamentAsset = nullptr;
         }
         if (model.entities && model.entityCount > 0) {
@@ -258,8 +259,8 @@ void Renderer::shutdown() {
     models_.clear();
 
     if (assetLoader_) {
-        auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
-        gltfio::AssetLoader::destroy(&loader);
+        auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
+        filament::gltfio::AssetLoader::destroy(&loader);
         assetLoader_ = nullptr;
     }
 
@@ -467,7 +468,7 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
             const void* data = AAsset_getBuffer(glbAsset);
 
             if (!assetLoader_) {
-                auto* materials = filament::gltfio::createUbershaderProvider(e);
+                auto* materials = filament::gltfio::createUbershaderProvider(e, nullptr, 0);
                 filament::gltfio::AssetConfiguration config;
                 config.engine = e;
                 config.materials = materials;
@@ -476,7 +477,7 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
 
             auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
             if (loader) {
-                auto* fa = loader->createAssetFromBinary(static_cast<const uint8_t*>(data), size);
+                auto* fa = loader->createAsset(static_cast<const uint8_t*>(data), (uint32_t)size);
                 if (fa) {
                     model.filamentAsset = fa;
 
@@ -496,7 +497,7 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
                     s->addEntities(fa->getEntities(), count);
                     LOGI("Loaded GLB model via gltfio: %s (%u entities)", model.path.c_str(), count);
                 } else {
-                    LOGE("gltfio createAssetFromBinary failed for: %s", model.path.c_str());
+                    LOGE("gltfio createAsset failed for: %s", model.path.c_str());
                 }
             }
             AAsset_close(glbAsset);
@@ -527,8 +528,8 @@ void Renderer::unloadModel(ObrisModel id) {
     auto* s = static_cast<filament::Scene*>(scene_);
 
     if (it->second.filamentAsset && assetLoader_) {
-        auto* loader = static_cast<gltfio::AssetLoader*>(assetLoader_);
-        auto* fa = static_cast<gltfio::FilamentAsset*>(it->second.filamentAsset);
+        auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
+        auto* fa = static_cast<filament::gltfio::FilamentAsset*>(it->second.filamentAsset);
         if (s) {
             s->removeEntities(fa->getEntities(), fa->getEntityCount());
         }
