@@ -45,6 +45,7 @@ typedef struct {
     void* nativeWindow;    // ANativeWindow*
     int useVulkan;         // 1=Vulkan, 0=OpenGL ES
     const char* iblPath;   // HDR IBL .ktx path (can be NULL)
+    void* env;             // JNIEnv*
 } ObrisConfig;
 
 // ── Model Info ────────────────────────────────────────────────
@@ -196,10 +197,6 @@ void obris_generate_key(unsigned char* outKey, int keyLen);
 
 /// Free memory allocated by obris functions.
 void obris_free(void* ptr);
-
-// ══════════════════════════════════════════════════════════════
-//  Platform (JNI callbacks)
-// ══════════════════════════════════════════════════════════════
 
 #ifdef __cplusplus
 }

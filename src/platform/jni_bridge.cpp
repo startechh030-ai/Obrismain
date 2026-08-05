@@ -36,7 +36,7 @@ Java_com_obris_ObrisActivity_nativeCreate(
     jint width, jint height,
     jstring iblPath) {
 
-    // Set global asset manager (for JSON reader and asset loading)
+    // Set global asset manager
     AAssetManager* aam = AAssetManager_fromJava(env, assetManager);
     setAssetManager((void*)aam);
 
@@ -49,8 +49,9 @@ Java_com_obris_ObrisActivity_nativeCreate(
     config.width = width;
     config.height = height;
     config.nativeWindow = window;
-    config.useVulkan = 0;  // Use OpenGL ES 3
+    config.useVulkan = 0;  // OpenGL ES 3 for universal Android compatibility
     config.iblPath = iblPath ? env->GetStringUTFChars(iblPath, nullptr) : nullptr;
+    config.env = env;      // Valid JNIEnv* passed to Filament JNI calls!
 
     // Create renderer
     gEngine.renderer = new Renderer();

@@ -103,17 +103,19 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     using namespace filament;
     using namespace filament::math;
 
+    JNIEnv* env = static_cast<JNIEnv*>(config.env);
+
     // 1. Create Engine via Builder pattern (JNI wrapper)
-    jlong builder = Java_com_google_android_filament_Engine_nCreateBuilder(nullptr, nullptr);
+    jlong builder = Java_com_google_android_filament_Engine_nCreateBuilder(env, nullptr);
     if (!builder) { LOGE("Engine builder creation failed"); return false; }
     
     Java_com_google_android_filament_Engine_nSetBuilderBackend(
-        nullptr, nullptr, builder,
+        env, nullptr, builder,
         static_cast<jint>(config.useVulkan ? 1 : 0));
     
     auto* e = reinterpret_cast<Engine*>(
-        Java_com_google_android_filament_Engine_nBuilderBuild(nullptr, nullptr, builder));
-    Java_com_google_android_filament_Engine_nDestroyBuilder(nullptr, nullptr, builder);
+        Java_com_google_android_filament_Engine_nBuilderBuild(env, nullptr, builder));
+    Java_com_google_android_filament_Engine_nDestroyBuilder(env, nullptr, builder);
     
     engine_ = e;
     if (!e) { LOGE("Engine::create failed via JNI builder"); return false; }
@@ -124,6 +126,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     if (!r) { LOGE("createRenderer failed"); return false; }
 
     // 3. Create SwapChain
+    if (!config.nativeWindow) { LOGE("config.nativeWindow is null"); return false; }
     auto* sw = e->createSwapChain(
         static_cast<ANativeWindow*>(config.nativeWindow),
         SwapChain::CONFIG_HAS_STENCIL_BUFFER);
@@ -133,18 +136,22 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     // 4. Create Scene
     auto* s = e->createScene();
     scene_ = s;
+    if (!s) { LOGE("createScene failed"); return false; }
 
     // 5. Create Camera (Angled viewport looking at origin)
     utils::Entity camEntity = utils::EntityManager::get().create();
+    if (camEntity.isNull()) { LOGE("camEntity creation failed"); return false; }
     cameraEntity_ = camEntity.getId();
     auto* cam = e->createCamera(camEntity);
     filamentCamera_ = cam;
+    if (!cam) { LOGE("createCamera failed"); return false; }
     cam->setProjection(60.0, (double)width_/height_, 0.1, 1000.0);
     cam->lookAt({0.0f, 2.5f, 5.0f}, {0.0f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f});
 
     // 6. Create View
     auto* v = e->createView();
     view_ = v;
+    if (!v) { LOGE("createView failed"); return false; }
     v->setScene(s);
     v->setCamera(cam);
     v->setViewport({0, 0, (uint32_t)width_, (uint32_t)height_});
@@ -159,35 +166,42 @@ bool Renderer::initFilament(const ObrisConfig& config) {
     auto* skybox = Skybox::Builder()
         .color({ 0.22f, 0.23f, 0.25f, 1.0f })
         .build(*e);
-    s->setSkybox(skybox);
-    skybox_ = skybox;
+    if (skybox) {
+        s->setSkybox(skybox);
+        skybox_ = skybox;
+    }
 
     // 8. Directional Sun Light (Daylight with shadows)
     utils::Entity sunEntity = utils::EntityManager::get().create();
-    LightManager::Builder(LightManager::Type::DIRECTIONAL)
-        .color(Color::toLinear({1.0f, 0.98f, 0.94f}))
-        .intensity(110000.0f)
-        .direction({-0.6f, -1.0f, -0.4f})
-        .castShadows(true)
-        .build(*e, sunEntity);
-    s->addEntity(sunEntity);
+    if (!sunEntity.isNull()) {
+        LightManager::Builder(LightManager::Type::DIRECTIONAL)
+            .color(Color::toLinear({1.0f, 0.98f, 0.94f}))
+            .intensity(110000.0f)
+            .direction({-0.6f, -1.0f, -0.4f})
+            .castShadows(true)
+            .build(*e, sunEntity);
+        s->addEntity(sunEntity);
+
+        LightEntry leSun;
+        leSun.entityId = sunEntity.getId(); leSun.active = true;
+        lights_.push_back(leSun);
+    }
 
     // 9. Fill Sky Light (Soft secondary fill)
     utils::Entity fillEntity = utils::EntityManager::get().create();
-    LightManager::Builder(LightManager::Type::DIRECTIONAL)
-        .color(Color::toLinear({0.5f, 0.65f, 0.85f}))
-        .intensity(35000.0f)
-        .direction({0.6f, 0.8f, 0.5f})
-        .castShadows(false)
-        .build(*e, fillEntity);
-    s->addEntity(fillEntity);
+    if (!fillEntity.isNull()) {
+        LightManager::Builder(LightManager::Type::DIRECTIONAL)
+            .color(Color::toLinear({0.5f, 0.65f, 0.85f}))
+            .intensity(35000.0f)
+            .direction({0.6f, 0.8f, 0.5f})
+            .castShadows(false)
+            .build(*e, fillEntity);
+        s->addEntity(fillEntity);
 
-    // Store lights
-    LightEntry leSun, leFill;
-    leSun.entityId = sunEntity.getId(); leSun.active = true;
-    leFill.entityId = fillEntity.getId(); leFill.active = true;
-    lights_.push_back(leSun);
-    lights_.push_back(leFill);
+        LightEntry leFill;
+        leFill.entityId = fillEntity.getId(); leFill.active = true;
+        lights_.push_back(leFill);
+    }
 
     // 10. Load precompiled grid.filamat from assets if present
     AAssetManager* aam = getAam();
@@ -469,14 +483,16 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
 
             if (!assetLoader_) {
                 auto* materials = filament::gltfio::createUbershaderProvider(e, nullptr, 0);
-                filament::gltfio::AssetConfiguration config;
-                config.engine = e;
-                config.materials = materials;
-                assetLoader_ = filament::gltfio::AssetLoader::create(config);
+                if (materials) {
+                    filament::gltfio::AssetConfiguration config;
+                    config.engine = e;
+                    config.materials = materials;
+                    assetLoader_ = filament::gltfio::AssetLoader::create(config);
+                }
             }
 
             auto* loader = static_cast<filament::gltfio::AssetLoader*>(assetLoader_);
-            if (loader) {
+            if (loader && data && size > 0) {
                 auto* fa = loader->createAsset(static_cast<const uint8_t*>(data), (uint32_t)size);
                 if (fa) {
                     model.filamentAsset = fa;
@@ -490,12 +506,14 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
                     resourceLoader.loadResources(fa);
 
                     uint32_t count = (uint32_t)fa->getEntityCount();
-                    model.entityCount = count;
-                    model.entities = new utils::Entity[count];
-                    memcpy(model.entities, fa->getEntities(), sizeof(utils::Entity) * count);
+                    if (count > 0 && fa->getEntities()) {
+                        model.entityCount = count;
+                        model.entities = new utils::Entity[count];
+                        memcpy(model.entities, fa->getEntities(), sizeof(utils::Entity) * count);
 
-                    s->addEntities(fa->getEntities(), count);
-                    LOGI("Loaded GLB model via gltfio: %s (%u entities)", model.path.c_str(), count);
+                        s->addEntities(fa->getEntities(), count);
+                        LOGI("Loaded GLB model via gltfio: %s (%u entities)", model.path.c_str(), count);
+                    }
                 } else {
                     LOGE("gltfio createAsset failed for: %s", model.path.c_str());
                 }
