@@ -21,6 +21,10 @@
     ".sh": {
       "enabled": true,
       "run": "bash-language-server start"
+    },
+    ".kts": {
+      "enabled": true,
+      "run": "kotlin-language-server"
     }
   }
 }
