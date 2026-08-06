@@ -1,21 +1,17 @@
 cmake_minimum_required(VERSION 3.22)
 project(obris
     VERSION 0.1.0
-    DESCRIPTION "Obris — Lightweight GLB Renderer + Audio Engine"
+    DESCRIPTION "Obris — High-Performance Game Engine Utility Library"
     LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(OBRIS_BUILD_TESTS "Build tests" OFF)
-
-# ── Sources ──────────────────────────────────────────────────
 file(GLOB_RECURSE OBRIS_SOURCES
     src/*.cpp src/*.h
 )
 
-# ── Library ──────────────────────────────────────────────────
 add_library(obris_shared SHARED ${OBRIS_SOURCES})
 
 target_include_directories(obris_shared PUBLIC
@@ -27,34 +23,16 @@ target_include_directories(obris_shared PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
 )
 
-# ── Find Dependencies ────────────────────────────────────────
 include(cmake/FindObrisDeps.cmake)
 
 target_link_libraries(obris_shared
     ${ANDROID_LOG_LIBRARY}
-    ${ANDROID_VULKAN_LIBRARY}
-    ${ANDROID_NATIVE_WINDOW_LIBRARY}
     ${ANDROID_OPENGLES_LIBRARY}
     ${ANDROID_EGL_LIBRARY}
-    android                    # AAssetManager_*, ANativeWindow_fromSurface
-    nativewindow               # ANativeWindow_* functions
+    android
+    nativewindow
 )
 
-if(TARGET filament::filament)
-    target_link_libraries(obris_shared filament::filament)
-    target_compile_definitions(obris_shared PRIVATE OBRIS_USE_FILAMENT=1)
-endif()
-if(TARGET filament::filamat)
-    target_link_libraries(obris_shared filament::filamat)
-    target_compile_definitions(obris_shared PRIVATE OBRIS_USE_FILAMAT=1)
-endif()
-if(TARGET filament::gltfio)
-    target_link_libraries(obris_shared filament::gltfio)
-    target_compile_definitions(obris_shared PRIVATE OBRIS_USE_GLTFIO=1)
-endif()
-if(TARGET filament::ibl)
-    target_link_libraries(obris_shared filament::ibl)
-endif()
 if(TARGET miniaudio)
     target_link_libraries(obris_shared miniaudio)
     target_compile_definitions(obris_shared PRIVATE OBRIS_USE_MINIAUDIO=1)
