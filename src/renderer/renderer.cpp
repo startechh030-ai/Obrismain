@@ -32,6 +32,8 @@
 #include <gltfio/AssetLoader.h>
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/FilamentAsset.h>
+#include <gltfio/FilamentInstance.h>
+#include <gltfio/Animator.h>
 #include <gltfio/MaterialProvider.h>
 #include <android/log.h>
 #include <android/native_window.h>
@@ -229,7 +231,7 @@ bool Renderer::initFilament(const ObrisConfig& config) {
         }
     }
 
-    LOGI("Filament init complete (all null checks passed)");
+    LOGI("Filament init complete");
     return true;
 #else
     (void)config;
@@ -505,6 +507,15 @@ ObrisModel Renderer::loadModel(const ObrisModelInfo& info) {
 
                     filament::gltfio::ResourceLoader resourceLoader(resConfig);
                     resourceLoader.loadResources(fa);
+
+                    // Update initial bone matrices for skinned character meshes!
+                    // This prevents Filament's 'PreconditionPanic: .!bones.skinning' crash!
+                    auto* instance = fa->getInstance();
+                    auto* animator = instance ? instance->getAnimator() : fa->getAnimator();
+                    if (animator) {
+                        animator->updateBoneMatrices();
+                        LOGI("Updated initial bone matrices for skinned GLB asset: %s", info.path);
+                    }
 
                     uint32_t count = (uint32_t)fa->getEntityCount();
                     if (count > 0 && fa->getEntities()) {
